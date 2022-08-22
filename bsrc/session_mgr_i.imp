@@ -1,0 +1,862 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+IMPLEMENTATION
+    session_mgr_i
+REFINES
+    session_mgr
+
+SEES
+    constants,
+    constants_statuscodes_bs,
+    message_in_bs,
+    message_out_bs,
+    channel_mgr,
+    request_handle_bs,
+    app_cb_call_context_bs
+
+IMPORTS
+    session_core,
+    session_mgr_it,
+    session_request_handle_bs
+
+PROMOTES
+    is_valid_session,
+    client_secure_channel_lost_session_sm,
+    server_secure_channel_lost_session_sm,
+    get_session_user_server,
+    get_local_user,
+    get_server_session_preferred_locales,
+    find_channel_to_close,
+    getall_valid_session_channel
+
+LOCAL_OPERATIONS
+
+    local_client_close_session (session, sc_reason) =
+    PRE
+        session : t_session_i &
+        session : s_session &
+        sc_reason : t_StatusCode_i &
+        sc_reason : t_StatusCode
+    THEN
+        a_cli_pending_requests,
+        a_state,
+        a_channel,
+        a_client_orphaned,
+        a_client_token,
+        a_user_server,
+        a_user_client,
+        a_NonceServer,
+        a_NonceClient
+        :(  a_cli_pending_requests : t_client_request_handle +-> t_session       &
+            a_state                : s_session        --> t_sessionState         &
+            a_channel              : s_session        +-> t_channel              &
+            a_client_orphaned      : s_session        +-> t_channel_config_idx_i &
+            a_client_token         : s_session        +-> t_session_token        &
+            a_server_token         : t_session_token  >+> s_session              &
+            a_user_server          : s_session        +-> t_user                 &
+            a_user_client          : s_session        +-> t_user_token           &
+            a_NonceServer          : s_session        +-> t_Nonce                &
+            a_NonceClient          : s_session        +-> t_Nonce
+        )
+    END;
+
+    local_client_close_session_if_needed (cond, session, sc_reason) =
+    PRE
+        cond    : BOOL &
+        session : t_session_i &
+        session : s_session &
+        sc_reason : t_StatusCode_i &
+        (cond = TRUE => sc_reason : t_StatusCode)
+    THEN
+        a_cli_pending_requests,
+        a_state,
+        a_channel,
+        a_client_orphaned,
+        a_client_token,
+        a_user_server,
+        a_user_client,
+        a_NonceServer,
+        a_NonceClient
+        :(  a_cli_pending_requests : t_client_request_handle +-> t_session       &
+            a_state                : s_session        --> t_sessionState         &
+            a_channel              : s_session        +-> t_channel              &
+            a_client_orphaned      : s_session        +-> t_channel_config_idx_i &
+            a_client_token         : s_session        +-> t_session_token        &
+            a_server_token         : t_session_token  >+> s_session              &
+            a_user_server          : s_session        +-> t_user                 &
+            a_user_client          : s_session        +-> t_user_token           &
+            a_NonceServer          : s_session        +-> t_Nonce                &
+            a_NonceClient          : s_session        +-> t_Nonce
+        )
+    END;
+
+    local_client_activate_sessions_on_SC_connection (channel_config_idx) =
+    PRE
+        channel_config_idx : t_channel_config_idx_i &
+        channel_config_idx : t_channel_config_idx
+    THEN
+        a_client_to_create,
+        sessions_to_iterate,
+        sessions_iterated
+        :(
+            a_client_to_create : s_session +-> t_channel_config_idx_i &
+            sessions_to_iterate <: t_session &
+            sessions_iterated   <: t_session
+        )
+    END
+    ;
+
+    local_client_close_sessions_on_SC_final_connection_failure (channel_config_idx) =
+    PRE
+        channel_config_idx : t_channel_config_idx_i &
+        channel_config_idx : t_channel_config_idx
+    THEN
+        a_cli_pending_requests,
+        a_state,
+        a_channel,
+        a_client_orphaned,
+        a_client_token,
+        a_user_server,
+        a_user_client,
+        a_NonceServer,
+        a_NonceClient,
+        sessions_to_iterate,
+        sessions_iterated
+        :(
+            a_cli_pending_requests : t_client_request_handle +-> t_session       &
+            a_state                : s_session        --> t_sessionState         &
+            a_channel              : s_session        +-> t_channel              &
+            a_client_orphaned      : s_session        +-> t_channel_config_idx_i &
+            a_client_token         : s_session        +-> t_session_token        &
+            a_server_token         : t_session_token  >+> s_session              &
+            a_user_server          : s_session        +-> t_user                 &
+            a_user_client          : s_session        +-> t_user_token           &
+            a_NonceServer          : s_session        +-> t_Nonce                &
+            a_NonceClient          : s_session        +-> t_Nonce                &
+            sessions_to_iterate   <: t_session                                   &
+            sessions_iterated     <: t_session &
+            sessions_to_iterate /\ sessions_iterated = {}
+        )
+    END
+
+OPERATIONS
+
+    local_client_close_session (session, sc_reason) =
+    BEGIN
+        client_remove_all_request_handles (session);
+        client_close_session_sm (session, sc_reason)
+    END;
+
+    local_client_close_session_if_needed (cond, session, sc_reason) =
+    IF cond = FALSE THEN
+        local_client_close_session (session, sc_reason)
+    END
+    ;
+
+    local_client_activate_sessions_on_SC_connection (channel_config_idx) =
+    VAR
+        l_continue,
+        l_session,
+        l_dom,
+        l_channel_config_idx
+    IN
+        l_continue <-- init_iter_session;
+        IF  l_continue = TRUE THEN /* only for proving */
+            WHILE l_continue = TRUE DO
+                l_continue, l_session <-- continue_iter_session;
+                l_dom, l_channel_config_idx <-- getall_orphaned(l_session);
+                IF  l_dom = TRUE &
+                    l_channel_config_idx = channel_config_idx
+                THEN
+                    client_gen_activate_orphaned_session_internal_event (l_session, channel_config_idx)
+                END;
+                l_dom, l_channel_config_idx <-- getall_to_create(l_session);
+                IF  l_dom = TRUE &
+                    l_channel_config_idx = channel_config_idx
+                THEN
+                    reset_session_to_create(l_session);
+                    client_gen_create_session_internal_event (l_session, channel_config_idx)
+                END
+            INVARIANT
+                sessions_to_iterate <: t_session &
+                sessions_iterated   <: t_session &
+                sessions_to_iterate /\ sessions_iterated = {} &
+                sessions_to_iterate \/ sessions_iterated = t_session
+            VARIANT
+                card(sessions_to_iterate)
+            END
+        END
+    END
+    ;
+
+
+    local_client_close_sessions_on_SC_final_connection_failure (channel_config_idx) =
+    VAR
+        l_continue,
+        l_session,
+        l_dom,
+        l_channel_config_idx
+    IN
+        l_continue <-- init_iter_session;
+        IF  l_continue = TRUE THEN /* only for proving */
+            WHILE l_continue = TRUE DO
+                l_continue, l_session <-- continue_iter_session;
+                l_dom, l_channel_config_idx <-- getall_orphaned(l_session);
+                IF  l_dom = TRUE &
+                    l_channel_config_idx = channel_config_idx
+                THEN
+                    local_client_close_session(l_session, e_sc_bad_secure_channel_closed)
+                END;
+                l_dom, l_channel_config_idx <-- getall_to_create(l_session);
+                IF  l_dom = TRUE &
+                    l_channel_config_idx = channel_config_idx
+                THEN
+                    local_client_close_session(l_session, e_sc_bad_secure_channel_closed)
+                END
+            INVARIANT
+                sessions_to_iterate <: t_session &
+                sessions_iterated   <: t_session &
+                sessions_to_iterate /\ sessions_iterated = {} &
+                sessions_to_iterate \/ sessions_iterated = t_session
+            VARIANT
+                card(sessions_to_iterate)
+            END
+        END
+    END
+    ;
+
+    /* END OF LOCAL OPERATIONS */
+
+    session <-- client_receive_session_resp (channel, req_handle, resp_typ, resp_header, resp_msg) =
+    VAR
+        l_session_token,
+        l_session_state,
+        l_session_channel,
+        l_resp_status,
+        l_session_user_token,
+        l_status_reason,
+        l_bret
+    IN
+        l_bret := FALSE;
+        session <-- client_get_session_and_remove_request_handle (req_handle);
+        l_session_state <-- get_session_state_or_closed (session); // Note: state != closed => session is valid
+        l_resp_status <-- read_msg_resp_header_service_status (resp_header);
+        IF  l_session_state /= e_session_closed &
+            l_resp_status = e_sc_ok
+        THEN
+            CASE resp_typ OF
+                EITHER e_msg_session_create_resp THEN
+                    IF l_session_state = e_session_creating THEN
+                        l_session_channel <-- get_session_channel (session);
+                        IF l_session_channel = channel THEN
+                            l_session_token <-- read_create_session_msg_session_token (resp_msg);
+                            l_bret <-- client_create_session_resp_sm (channel, session, l_session_token, resp_msg);
+                            // If we fail it shall be for security reason
+                            l_status_reason := e_sc_bad_security_checks_failed;
+                            /* TODO: react if error: must drop the nonce, but do we close the connexion? */
+                            // If session is created, trigger event for activation of session with async data
+                            l_session_state <-- get_session_state_or_closed (session);
+                            IF l_session_state = e_session_created
+                            THEN
+                                l_session_user_token <-- get_session_user_client (session);
+                                client_gen_activate_user_session_internal_event (session, l_session_user_token)
+                            ELSE
+                                /* The session may be not e_session_created when Nonce generation failed */
+                                l_bret := FALSE
+                            END
+                        ELSE
+                            /* Bad secure channel */
+                            l_status_reason := e_sc_bad_secure_channel_id_invalid;
+                            skip
+                        END
+                    ELSE
+                        /* Session invalid state */
+                        l_status_reason := e_sc_bad_invalid_state;
+                        skip
+                    END
+                OR e_msg_session_activate_resp THEN
+                    IF l_session_state = e_session_userActivating or
+                        l_session_state = e_session_scActivating
+                    THEN
+                        l_session_channel <-- get_session_channel (session);
+                        IF l_session_channel = channel THEN
+                            l_bret <-- client_activate_session_resp_sm (channel, session, resp_msg);
+                            // If we fail it shall be for security reason
+                            l_status_reason := e_sc_bad_security_checks_failed
+                        ELSE
+                            /* Bad secure channel */
+                            l_status_reason := e_sc_bad_secure_channel_id_invalid;
+                            skip
+                        END
+                    ELSE
+                        /* Session invalid state */
+                        l_status_reason := e_sc_bad_invalid_state;
+                        skip
+                    END
+                OR e_msg_session_close_resp THEN
+                    IF l_session_state = e_session_closing
+                    THEN
+                        l_session_channel <-- get_session_channel (session);
+                        IF l_session_channel = channel THEN
+                            client_remove_all_request_handles (session);
+                            client_close_session_resp_sm (channel, session, resp_msg);
+                            l_bret := TRUE;
+                            l_status_reason := e_sc_ok
+                        ELSE
+                            /* Bad secure channel */
+                            l_status_reason := e_sc_bad_secure_channel_id_invalid;
+                            skip
+                        END
+                    ELSE
+                        /* Session invalid state */
+                        l_status_reason := e_sc_bad_invalid_state;
+                        skip
+                    END
+                OR e_msg_session_cancel_resp THEN
+                    /* Service not supported */
+                    l_status_reason := e_sc_bad_service_unsupported;
+                    skip
+                ELSE
+                    /* Service unknown */
+                    l_status_reason := e_sc_bad_service_unsupported;
+                    skip
+                END
+            END;
+            /* TODO: retrieve a more precise reason */
+            local_client_close_session_if_needed (l_bret, session, l_status_reason)
+        ELSIF l_session_state /= e_session_closed
+        THEN
+            /* Bad service code returned, close the session */
+            local_client_close_session (session, l_resp_status)
+        ELSE
+            // Session is closed
+            skip
+        END
+    END
+    ;
+
+    session, service_ret <-- server_receive_session_req (channel, session_token, req_msg, req_typ, resp_msg) =
+    VAR
+        l_valid_session,
+        l_session_state,
+        l_session_channel,
+        l_is_valid_user_token,
+        l_user_token,
+        l_channel_config_idx,
+        l_endpoint_config_idx,
+        l_has_user_token_policy_available,
+        l_timer_creation_ok,
+        l_user
+    IN
+        session := c_session_indet;
+        service_ret := c_StatusCode_indet;
+        CASE req_typ OF
+            EITHER e_msg_session_create_req THEN
+                // SESSION CREATION REQUEST
+                // If there is no way to activate a session, it means service is not supported for this secure channel
+                // This status code is reported in all error cases
+                l_channel_config_idx <-- get_channel_info (channel);
+                l_endpoint_config_idx <-- server_get_endpoint_config (channel);
+                l_has_user_token_policy_available <-- has_user_token_policy_available (l_channel_config_idx, l_endpoint_config_idx);
+                IF l_has_user_token_policy_available = TRUE
+                THEN
+                    session, service_ret <-- server_create_session_req_and_resp_sm (channel, req_msg, resp_msg);
+                    IF service_ret = e_sc_ok
+                    THEN
+                        l_timer_creation_ok <-- server_session_timeout_start_timer (session, resp_msg);
+                        IF l_timer_creation_ok = FALSE
+                        THEN
+                            service_ret := e_sc_bad_resource_unavailable;
+                            server_close_session_sm (session, e_sc_bad_resource_unavailable)
+                        END
+                    END
+                ELSE
+                    service_ret := e_sc_bad_service_unsupported
+                END
+            OR e_msg_session_activate_req THEN
+                // SESSION ACTIVATION REQUEST
+                // TODO: add a local operation for rest
+                session <-- server_get_session_from_token (session_token);
+                l_valid_session <-- is_valid_session (session);
+                l_session_state <-- get_session_state_or_closed (session);
+                IF l_valid_session = TRUE
+                THEN
+                    IF l_session_state = e_session_created or
+                        l_session_state = e_session_userActivated or
+                        l_session_state = e_session_scOrphaned
+                    THEN
+                        l_is_valid_user_token, l_user_token <-- read_activate_req_msg_identity_token (req_msg);
+                        IF l_is_valid_user_token = TRUE THEN
+                            service_ret, l_user <-- allocate_authenticated_user (channel, session, l_user_token);
+                            IF service_ret = e_sc_ok
+                            THEN
+                                // TODO: differentiate sc_activate from user_activate directly here
+                                service_ret <-- server_activate_session_req_and_resp_sm (channel, session, l_user, req_msg, resp_msg);
+                                /* User is allocated but stored nowhere; hence it must be freed */
+                                IF service_ret /= e_sc_ok
+                                THEN
+                                    deallocate_user (l_user)
+                                END
+                            END
+                        ELSE
+                            // invalid user token type
+                            service_ret := e_sc_bad_identity_token_invalid
+                        END;
+                        IF service_ret = e_sc_ok
+                        THEN
+                            server_session_timeout_msg_received (session)
+                        END
+                    ELSE
+                        // if session is not in a correct state to be activated => close session
+                        server_close_session_sm (session, e_sc_bad_invalid_state);
+                        service_ret := e_sc_bad_invalid_state
+                    END
+                ELSE
+                    // session token was not correct
+                    service_ret := e_sc_bad_session_id_invalid
+                END
+            OR e_msg_session_close_req THEN
+                // SESSION CLOSE REQUEST
+                // TODO: add a local operation for rest
+                session <-- server_get_session_from_token (session_token);
+                l_valid_session <-- is_valid_session (session);
+                l_session_state <-- get_session_state_or_closed (session);
+                IF l_valid_session = TRUE
+                THEN
+                    IF l_session_state = e_session_created or
+                        l_session_state = e_session_userActivating or
+                        l_session_state = e_session_userActivated
+                    THEN
+                        l_session_channel <-- get_session_channel (session);
+                        IF l_session_channel = channel
+                        THEN
+                            // TODO: respond to pending requests with error if close succeeded ?
+                            service_ret <-- server_close_session_req_and_resp_sm (channel, session, req_msg, resp_msg)
+                        ELSE
+                            // Close anyway since incorrect channel usage is unexpected
+                            server_close_session_sm (session, e_sc_bad_secure_channel_id_invalid);
+                            // Use closest error code corresponding for response
+                            service_ret := e_sc_bad_secure_channel_id_invalid
+                        END
+                    ELSE
+                        // Close session and return error
+                        server_close_session_sm (session, e_sc_bad_invalid_state);
+                        service_ret := e_sc_bad_invalid_state
+                    END
+                ELSE
+                    // session token was not correct => return error
+                    service_ret := e_sc_bad_session_id_invalid
+                END
+            ELSE
+                service_ret := e_sc_bad_service_unsupported
+            END
+        END
+    END
+    ;
+
+    ret, channel, session_token <-- client_validate_session_service_req (session, req_handle) =
+    VAR
+        l_session_state,
+        l_ret
+    IN
+        session_token := c_session_token_indet;
+        channel := c_channel_indet;
+        /* TODO: do not require req msg ? */
+        l_session_state <-- get_session_state_or_closed (session); // l_session_state /= closed => is_valid_session = TRUE
+        IF l_session_state = e_session_userActivated
+        THEN
+            session_token <-- client_get_token_from_session (session);
+            channel <-- get_session_channel (session);
+            client_add_session_request_handle (session, req_handle);
+            l_ret := e_sc_ok
+        ELSE
+            l_ret := e_sc_bad_invalid_argument
+        END;
+        ret := l_ret
+    END;
+
+    bres, session <-- client_validate_session_service_resp (channel, req_handle) =
+    VAR
+        l_session,
+        l_valid_session,
+        l_session_state,
+        l_session_channel
+    IN
+        session := c_session_indet;
+        l_session <-- client_get_session_and_remove_request_handle (req_handle);
+        l_valid_session <-- is_valid_session (l_session);
+        l_session_state <-- get_session_state_or_closed (l_session);
+        IF l_valid_session = TRUE
+        THEN
+            l_session_channel <-- get_session_channel (l_session);
+            IF l_session_state = e_session_userActivated &
+                l_session_channel = channel
+            THEN
+                bres <-- is_session_valid_for_service (channel, l_session)
+            ELSE
+                bres := FALSE
+            END;
+            IF bres = FALSE
+            THEN
+                // session in invalid state or invalid channel used => close session
+                IF l_session_state /= e_session_userActivated
+                THEN
+                    local_client_close_session (l_session, e_sc_bad_invalid_state)
+                ELSE
+                    local_client_close_session (l_session, e_sc_bad_secure_channel_id_invalid)
+                END
+            ELSE
+                session := l_session
+            END
+        ELSE
+            bres := FALSE
+        END
+    END;
+
+    is_valid_res, session, status_code_err <-- server_validate_session_service_req (channel, session_token) =
+    VAR
+        l_session,
+        l_valid_session,
+        l_session_state,
+        l_session_channel,
+        l_user
+    IN
+        l_session <-- server_get_session_from_token (session_token);
+        l_valid_session <-- is_valid_session (l_session);
+        l_session_state <-- get_session_state_or_closed (l_session);
+        session := c_session_indet;
+        IF l_valid_session = TRUE
+        THEN
+            l_session_channel <-- get_session_channel (l_session);
+            IF l_session_state = e_session_userActivated &
+                l_session_channel = channel
+            THEN
+                // Returns always TRUE if compliant with PRE (proved)
+                is_valid_res <-- is_session_valid_for_service (channel, l_session);
+                status_code_err := e_sc_ok;
+                session := l_session;
+                IF is_valid_res = TRUE
+                THEN
+                    l_user <-- get_session_user_server (l_session);
+                    set_app_call_context_session (l_user);
+                    server_session_timeout_msg_received (l_session)
+                END
+            ELSE
+                // Unexpected access to session (wrong state or channel): close it
+                IF l_session_channel /= channel THEN
+                    status_code_err := e_sc_bad_secure_channel_id_invalid
+                ELSE
+                    IF l_session_state =  e_session_created THEN
+                        status_code_err := e_sc_bad_session_not_activated
+                    ELSE
+                        status_code_err := e_sc_bad_invalid_state
+                    END;
+                    server_close_session_sm (l_session, status_code_err)
+                END;
+                is_valid_res := FALSE
+            END
+        ELSE
+            is_valid_res := FALSE;
+            status_code_err := e_sc_bad_session_id_invalid
+        END
+    END
+    ;
+
+    is_valid_res, status_code_err, channel <-- server_validate_session_service_resp (session) =
+    VAR
+        l_valid_session,
+        l_session_state,
+        l_session_channel
+    IN
+        channel := c_channel_indet;
+        /* Coherency of messages types done in PRE for now */
+        l_valid_session <-- is_valid_session (session);
+        l_session_state <-- get_session_state_or_closed (session);
+        IF l_valid_session = TRUE
+        THEN
+            l_session_channel <-- get_session_channel (session);
+            IF l_session_state = e_session_userActivated
+            THEN
+                // Returns always TRUE if compliant with PRE (proved)
+                is_valid_res <-- is_session_valid_for_service (l_session_channel, session);
+                status_code_err := e_sc_ok;
+                channel := l_session_channel
+            ELSE
+                is_valid_res := FALSE;
+                IF l_session_channel = channel THEN
+                    /* Invalid session state */
+                    status_code_err := e_sc_bad_invalid_state
+                ELSE
+                    status_code_err := e_sc_bad_secure_channel_id_invalid
+                END
+            END
+        ELSE
+            is_valid_res := FALSE;
+            status_code_err := e_sc_bad_session_id_invalid
+        END
+    END
+    ;
+
+    bret <-- client_create_session_req (session, channel, req_handle, create_req_msg) =
+    VAR
+        l_valid_session,
+        l_session_state,
+        l_valid,
+        l_bret
+    IN
+        l_bret := FALSE;
+        l_valid_session <-- is_valid_session (session);
+        l_session_state <-- get_session_state_or_closed (session);
+        IF l_valid_session = TRUE
+        THEN
+            IF l_session_state = e_session_init
+            THEN
+                l_valid <-- client_create_session_req_sm (session, channel, create_req_msg);
+                IF l_valid = TRUE THEN
+                    client_add_session_request_handle (session, req_handle);
+                    l_bret := TRUE
+                ELSE
+                    /* Create session request data failed */
+                    skip
+                END
+            ELSE
+                /* Session invalid state */
+                skip
+            END
+        ELSE
+            /* Session invalid */
+            skip
+        END;
+        bret := l_bret
+    END;
+
+    bres <-- client_async_activate_new_session_without_channel (channel_config_idx, p_user_token, app_context) =
+    VAR
+        l_session,
+        l_session_state
+    IN
+        l_session <-- client_init_session_sm;
+        l_session_state <-- get_session_state_or_closed (l_session); // Note: state != closed => session is valid
+        IF l_session_state = e_session_init
+        THEN
+            bres := TRUE;
+            /* channel did not exist or is not connected anymore: add async session creation on SC connection */
+            set_session_to_create(l_session, channel_config_idx);
+            set_session_app_context(l_session, app_context);
+            set_session_user_client(l_session, p_user_token)
+        ELSE
+            bres := FALSE
+        END
+    END
+    ;
+
+    bres <-- client_async_activate_new_session_with_channel (channel_config_idx, channel, p_user_token, app_context) =
+    VAR
+        l_session,
+        l_session_state
+    IN
+        // PRE guarantee channel is connected
+        channel_do_nothing(channel);
+        l_session <-- client_init_session_sm;
+        l_session_state <-- get_session_state_or_closed (l_session); // Note: state != closed => session is valid
+        IF l_session_state = e_session_init
+        THEN
+            bres := TRUE;
+            /* Generate event to create the session next and then waiting to be activated */
+            client_gen_create_session_internal_event (l_session, channel_config_idx);
+            set_session_user_client(l_session, p_user_token);
+            set_session_app_context(l_session, app_context)
+        ELSE
+            bres := FALSE
+        END
+    END
+    ;
+
+    ret, channel, session_token <-- client_user_activate_session_req (session, req_handle, p_user_token, activate_req_msg) =
+    VAR
+        l_valid_session,
+        l_session_state,
+        l_ret
+    IN
+        l_valid_session <-- is_valid_session (session);
+        IF l_valid_session = TRUE
+        THEN
+            l_session_state <-- get_session_state_or_closed (session);
+            IF l_session_state = e_session_created or
+                l_session_state = e_session_userActivated
+            THEN
+                l_ret, channel, session_token <-- client_user_activate_session_req_sm (session, p_user_token, activate_req_msg);
+                IF l_ret = e_sc_ok
+                THEN
+                    client_add_session_request_handle (session, req_handle)
+                END
+            ELSE
+                l_ret := e_sc_bad_invalid_state;
+                channel := c_channel_indet;
+                session_token := c_session_token_indet
+            END
+        ELSE
+            l_ret := e_sc_bad_invalid_argument;
+            channel := c_channel_indet;
+            session_token := c_session_token_indet
+        END;
+        ret := l_ret
+    END
+    ;
+
+    ret, session_token <-- client_sc_activate_session_req (session , req_handle, channel, activate_req_msg) =
+    VAR
+        l_valid_session,
+        l_session_state,
+        l_ret
+    IN
+        l_valid_session <-- is_valid_session (session);
+        IF l_valid_session = TRUE
+        THEN
+            l_session_state <-- get_session_state_or_closed (session);
+            IF l_session_state = e_session_scOrphaned or
+                l_session_state = e_session_userActivated
+            THEN
+                session_token <-- client_sc_activate_session_req_sm (session , channel, activate_req_msg);
+                client_add_session_request_handle (session, req_handle);
+                l_ret := e_sc_ok
+            ELSE
+                l_ret := e_sc_bad_invalid_state;
+                session_token := c_session_token_indet
+            END
+        ELSE
+            l_ret := e_sc_bad_invalid_argument;
+            session_token := c_session_token_indet
+        END;
+        ret := l_ret
+    END
+    ;
+
+    client_channel_connected_event_session (channel_config_idx, channel) =
+    BEGIN
+        // PRE guarantee channel is connected
+        channel_do_nothing(channel);
+        // Associate sessions waiting for sc connection (orphaned or waiting for creation)
+        local_client_activate_sessions_on_SC_connection (channel_config_idx)
+    END
+    ;
+
+    ret, channel, session_token <-- client_close_session_req (session, req_handle, close_req_msg) =
+    VAR
+        l_valid_session,
+        l_session_state,
+        l_ret
+    IN
+        l_valid_session <-- is_valid_session(session);
+        IF l_valid_session = TRUE
+        THEN
+            l_session_state <-- get_session_state_or_closed (session);
+            IF l_session_state = e_session_created or
+                l_session_state = e_session_userActivating or
+                l_session_state = e_session_userActivated
+            THEN
+                l_ret, channel, session_token <-- client_close_session_req_sm (session, close_req_msg);
+                IF l_ret /= e_sc_ok
+                THEN
+                    /* Unexpected case: associated channel shall be connected for those session states */
+                    local_client_close_session (session, l_ret);
+                    l_ret := e_sc_bad_unexpected_error
+                END;
+                IF l_ret = e_sc_ok
+                THEN
+                    client_add_session_request_handle (session, req_handle)
+                END
+            ELSE
+                l_ret := e_sc_bad_invalid_state;
+                local_client_close_session (session, l_ret);
+                channel := c_channel_indet;
+                session_token := c_session_token_indet
+            END
+        ELSE
+            l_ret := e_sc_bad_invalid_argument;
+            channel := c_channel_indet;
+            session_token := c_session_token_indet
+        END;
+        ret := l_ret
+    END
+    ;
+
+    client_close_sessions_on_final_connection_failure (channel_config_idx) =
+    BEGIN
+        // Close all sessions waiting for this channel config to be connected since its final failure
+        local_client_close_sessions_on_SC_final_connection_failure (channel_config_idx)
+    END
+    ;
+
+    client_close_session (session, sc_reason) =
+    VAR
+        l_valid_session
+    IN
+        l_valid_session <-- is_valid_session (session);
+        IF l_valid_session = TRUE
+        THEN
+            local_client_close_session (session, sc_reason)
+        END // ELSE: ignore close
+    END
+    ;
+
+    server_evaluate_session_timeout (session) =
+    VAR
+        l_valid_session,
+        l_session_expired
+    IN
+        l_valid_session <-- is_valid_session (session);
+        IF l_valid_session = TRUE
+        THEN
+            l_session_expired <-- server_session_timeout_evaluation (session);
+            IF l_session_expired = TRUE
+            THEN
+                server_close_session_sm (session, e_sc_bad_timeout)
+            END
+        END
+    END
+    ;
+
+    server_close_session (session, sc_reason) =
+    VAR
+        l_valid_session
+    IN
+        l_valid_session <-- is_valid_session (session);
+        IF l_valid_session = TRUE
+        THEN
+            server_close_session_sm (session, sc_reason)
+        END
+    END
+    ;
+
+    /* Get access to server configuration */
+    endpoint_config_idx <-- session_get_endpoint_config(p_session) =
+    VAR
+        l_channel,
+        l_continue
+    IN
+        endpoint_config_idx := c_endpoint_config_idx_indet;
+        l_continue, l_channel <-- getall_valid_session_channel (p_session);
+        IF l_continue = TRUE THEN
+            endpoint_config_idx <-- server_get_endpoint_config (l_channel)
+        END
+    END
+
+END

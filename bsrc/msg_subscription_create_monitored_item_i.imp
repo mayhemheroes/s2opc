@@ -1,0 +1,75 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+IMPLEMENTATION
+    msg_subscription_create_monitored_item_i
+
+REFINES
+    msg_subscription_create_monitored_item
+
+IMPORTS
+    msg_subscription_create_monitored_item_bs
+
+SEES
+    constants,
+    constants_statuscodes_bs,
+    message_in_bs,
+    message_out_bs
+
+PROMOTES
+    getall_monitored_item_req_params,
+    alloc_msg_create_monitored_items_resp_results,
+    setall_msg_monitored_item_resp_params
+
+CONCRETE_VARIABLES
+    nb_monitored_items
+
+INITIALISATION
+    nb_monitored_items := 0
+
+OPERATIONS
+    p_sc, p_subscription, p_timestampToRet, p_nb_monitored_items <-- getall_msg_create_monitored_items_req_params (p_req_msg) =
+    VAR
+        l_monitored_item_not_null
+    IN
+        p_subscription <-- get_msg_create_monitored_items_req_subscription (p_req_msg);
+        p_timestampToRet <-- get_msg_create_monitored_items_req_timestamp_to_ret (p_req_msg);
+        p_nb_monitored_items <-- get_msg_create_monitored_items_req_nb_monitored_items (p_req_msg);
+        IF p_nb_monitored_items <= 0
+        THEN
+            p_sc := e_sc_bad_nothing_to_do
+        ELSIF p_nb_monitored_items > k_n_monitoredItem_max
+        THEN
+            p_sc := e_sc_bad_too_many_ops
+        ELSIF p_timestampToRet = c_TimestampsToReturn_indet
+        THEN
+            p_sc := e_sc_bad_timestamps_to_return_invalid
+        ELSE
+            l_monitored_item_not_null <-- check_msg_create_monitored_items_req_not_null (p_req_msg);
+            IF l_monitored_item_not_null = FALSE
+            THEN
+                p_sc := e_sc_bad_decoding_error
+            ELSE
+                nb_monitored_items := p_nb_monitored_items;
+                p_sc := e_sc_ok
+            END
+        END
+    END
+
+END

@@ -1,0 +1,921 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+IMPLEMENTATION io_dispatch_mgr_i
+REFINES io_dispatch_mgr
+
+SEES
+    constants,
+    constants_statuscodes_bs
+
+IMPORTS
+    service_mgr,
+    channel_mgr,
+    node_id_pointer_bs,
+    write_value_pointer_bs,
+    data_value_pointer_bs,
+    time_reference_bs,
+    app_cb_call_context_bs
+
+PROMOTES
+    internal_server_inactive_session_prio_event
+
+LOCAL_OPERATIONS
+
+    header_type <-- get_msg_header_type (msg_typ) =
+    PRE
+        msg_typ : t_msg_type_i &
+        msg_typ : t_msg_type
+    THEN
+        header_type
+        :(  header_type : t_msg_header_type_i &
+
+            (   msg_typ : s_service_reqs
+                =>
+                header_type = e_msg_request_type) &
+            (   msg_typ : s_service_resps
+                =>
+                header_type = e_msg_response_type) &
+            (   not(msg_typ : s_service_reqs) &
+                not(msg_typ : s_service_resps)
+                =>
+                header_type = c_msg_header_type_indet)
+        )
+    END
+    ;
+
+    service_class <-- get_msg_service_class (msg_typ) =
+    PRE
+        msg_typ : t_msg_type_i &
+        msg_typ : t_msg_type
+    THEN
+        service_class
+        :(  service_class : t_msg_service_class_i &
+            service_class : t_msg_service_class   &
+
+            (   msg_typ : s_discovery_service_reqs \/ s_discovery_service_resps
+                =>
+                service_class = e_msg_discovery_service_class) &
+            (   msg_typ : s_service_on_session_reqs \/ s_service_on_session_resps
+                =>
+                service_class = e_msg_session_service_class) &
+            (   msg_typ : s_session_treatment_reqs \/ s_session_treatment_resps
+                =>
+                service_class = e_msg_session_treatment_class) &
+            (   not(msg_typ : s_discovery_service_reqs  \/ s_discovery_service_resps)  &
+                not(msg_typ : s_service_on_session_reqs \/ s_service_on_session_resps) &
+                not(msg_typ : s_session_treatment_reqs  \/ s_session_treatment_resps)
+                =>
+                service_class = e_msg_service_fault_class)
+        )
+    END
+    ;
+
+    /* Check if auto-closing should be activated and
+       close oldest secure channel without session if available */
+    l_is_one_sc_closing <-- l_may_close_secure_channel_without_session =
+    BEGIN
+        l_is_one_sc_closing,
+        s_cli_channel_disconnecting
+        :(s_cli_channel_disconnecting <: t_channel_config_idx &
+          l_is_one_sc_closing : BOOL &
+          (s_cli_channel_disconnecting /= s_cli_channel_disconnecting$0 => l_is_one_sc_closing = TRUE))
+      /* s_cli_channel_disconnecting is modified only if a channel is closing and we are on client side */
+    END
+    ;
+
+    /* Set application context for the channel used:
+     * for now used only when message received because it is only used
+     * during a server service treatment.
+     * It might be extended later to client side or others treatments / events.
+     */
+    l_set_app_call_context_channel_config (p_channel) =
+    PRE
+        p_channel : t_channel_i
+    THEN
+        skip
+    END
+
+OPERATIONS
+
+    header_type <-- get_msg_header_type (msg_typ) =
+    BEGIN
+        header_type := c_msg_header_type_indet;
+        CASE msg_typ OF
+            EITHER e_msg_session_create_req,
+                e_msg_session_activate_req,
+                e_msg_session_close_req,
+                e_msg_session_cancel_req,
+                e_msg_node_add_nodes_req,
+                e_msg_node_add_references_req,
+                e_msg_node_delete_nodes_req,
+                e_msg_node_delete_references_req,
+                e_msg_view_browse_req,
+                e_msg_view_browse_next_req,
+                e_msg_view_translate_browse_paths_to_node_ids_req,
+                e_msg_view_register_nodes_req,
+                e_msg_view_unregister_nodes_req,
+                e_msg_query_first_req,
+                e_msg_query_next_req,
+                e_msg_attribute_read_req,
+                e_msg_attribute_history_read_req,
+                e_msg_attribute_write_req,
+                e_msg_attribute_history_update_req,
+                e_msg_method_call_req,
+                e_msg_monitored_items_create_req,
+                e_msg_monitored_items_modify_req,
+                e_msg_monitored_items_set_monitoring_mode_req,
+                e_msg_monitored_items_set_triggering_req,
+                e_msg_monitored_items_delete_req,
+                e_msg_subscription_create_req,
+                e_msg_subscription_modify_req,
+                e_msg_subscription_set_publishing_mode_req,
+                e_msg_subscription_publish_req,
+                e_msg_subscription_republish_req,
+                e_msg_subscription_transfer_subscriptions_req,
+                e_msg_subscription_delete_subscriptions_req,
+                e_msg_discovery_find_servers_req,
+                e_msg_discovery_find_servers_on_network_req,
+                e_msg_discovery_get_endpoints_req,
+                e_msg_discovery_register_server_req,
+                e_msg_discovery_register_server2_req
+            THEN
+                header_type := e_msg_request_type
+            OR e_msg_session_create_resp,
+                e_msg_session_activate_resp,
+                e_msg_session_close_resp,
+                e_msg_session_cancel_resp,
+                e_msg_node_add_nodes_resp,
+                e_msg_node_add_references_resp,
+                e_msg_node_delete_nodes_resp,
+                e_msg_node_delete_references_resp,
+                e_msg_view_browse_resp,
+                e_msg_view_browse_next_resp,
+                e_msg_view_translate_browse_paths_to_node_ids_resp,
+                e_msg_view_register_nodes_resp,
+                e_msg_view_unregister_nodes_resp,
+                e_msg_query_first_resp,
+                e_msg_query_next_resp,
+                e_msg_attribute_read_resp,
+                e_msg_attribute_history_read_resp,
+                e_msg_attribute_write_resp,
+                e_msg_attribute_history_update_resp,
+                e_msg_method_call_resp,
+                e_msg_monitored_items_create_resp,
+                e_msg_monitored_items_modify_resp,
+                e_msg_monitored_items_set_monitoring_mode_resp,
+                e_msg_monitored_items_set_triggering_resp,
+                e_msg_monitored_items_delete_resp,
+                e_msg_subscription_create_resp,
+                e_msg_subscription_modify_resp,
+                e_msg_subscription_set_publishing_mode_resp,
+                e_msg_subscription_publish_resp,
+                e_msg_subscription_republish_resp,
+                e_msg_subscription_transfer_subscriptions_resp,
+                e_msg_subscription_delete_subscriptions_resp,
+                e_msg_discovery_find_servers_resp,
+                e_msg_discovery_find_servers_on_network_resp,
+                e_msg_discovery_get_endpoints_resp,
+                e_msg_discovery_register_server_resp,
+                e_msg_discovery_register_server2_resp,
+                /* generic service fault */
+                e_msg_service_fault_resp
+            THEN
+                header_type := e_msg_response_type
+            END
+        END
+    END
+    ;
+
+    service_class <-- get_msg_service_class (msg_typ) =
+    BEGIN
+        CASE msg_typ OF
+            EITHER e_msg_discovery_find_servers_req,
+                e_msg_discovery_find_servers_resp,
+                e_msg_discovery_find_servers_on_network_req,
+                e_msg_discovery_find_servers_on_network_resp,
+                e_msg_discovery_get_endpoints_req,
+                e_msg_discovery_get_endpoints_resp,
+                e_msg_discovery_register_server_req,
+                e_msg_discovery_register_server_resp,
+                e_msg_discovery_register_server2_req,
+                e_msg_discovery_register_server2_resp
+            THEN
+                service_class := e_msg_discovery_service_class
+            OR e_msg_session_create_req,
+                e_msg_session_create_resp,
+                e_msg_session_activate_req,
+                e_msg_session_activate_resp,
+                e_msg_session_close_req,
+                e_msg_session_close_resp,
+                e_msg_session_cancel_req,
+                e_msg_session_cancel_resp
+            THEN
+                service_class := e_msg_session_treatment_class
+            OR e_msg_node_add_nodes_req,
+                e_msg_node_add_nodes_resp,
+                e_msg_node_add_references_req,
+                e_msg_node_add_references_resp,
+                e_msg_node_delete_nodes_req,
+                e_msg_node_delete_nodes_resp,
+                e_msg_node_delete_references_req,
+                e_msg_node_delete_references_resp,
+                e_msg_view_browse_req,
+                e_msg_view_browse_resp,
+                e_msg_view_browse_next_req,
+                e_msg_view_browse_next_resp,
+                e_msg_view_translate_browse_paths_to_node_ids_req,
+                e_msg_view_translate_browse_paths_to_node_ids_resp,
+                e_msg_view_register_nodes_req,
+                e_msg_view_register_nodes_resp,
+                e_msg_view_unregister_nodes_req,
+                e_msg_view_unregister_nodes_resp,
+                e_msg_query_first_req,
+                e_msg_query_first_resp,
+                e_msg_query_next_req,
+                e_msg_query_next_resp,
+                e_msg_attribute_read_req,
+                e_msg_attribute_read_resp,
+                e_msg_attribute_history_read_req,
+                e_msg_attribute_history_read_resp,
+                e_msg_attribute_write_req,
+                e_msg_attribute_write_resp,
+                e_msg_attribute_history_update_req,
+                e_msg_attribute_history_update_resp,
+                e_msg_method_call_req,
+                e_msg_method_call_resp,
+                e_msg_monitored_items_create_req,
+                e_msg_monitored_items_create_resp,
+                e_msg_monitored_items_modify_req,
+                e_msg_monitored_items_modify_resp,
+                e_msg_monitored_items_set_monitoring_mode_req,
+                e_msg_monitored_items_set_monitoring_mode_resp,
+                e_msg_monitored_items_set_triggering_req,
+                e_msg_monitored_items_set_triggering_resp,
+                e_msg_monitored_items_delete_req,
+                e_msg_monitored_items_delete_resp,
+                e_msg_subscription_create_req,
+                e_msg_subscription_create_resp,
+                e_msg_subscription_modify_req,
+                e_msg_subscription_modify_resp,
+                e_msg_subscription_set_publishing_mode_req,
+                e_msg_subscription_set_publishing_mode_resp,
+                e_msg_subscription_publish_req,
+                e_msg_subscription_publish_resp,
+                e_msg_subscription_republish_req,
+                e_msg_subscription_republish_resp,
+                e_msg_subscription_transfer_subscriptions_req,
+                e_msg_subscription_transfer_subscriptions_resp,
+                e_msg_subscription_delete_subscriptions_req,
+                e_msg_subscription_delete_subscriptions_resp
+            THEN
+                service_class := e_msg_session_service_class
+            ELSE
+                service_class := e_msg_service_fault_class
+            END
+        END
+    END
+    ;
+
+    l_is_one_sc_closing <-- l_may_close_secure_channel_without_session =
+    VAR
+        l_is_active,
+        l_has_channel_to_close,
+        l_channel_to_close
+    IN
+        l_is_one_sc_closing := FALSE;
+        l_is_active <-- is_auto_close_channel_active;
+        IF l_is_active = TRUE
+        THEN
+            l_has_channel_to_close, l_channel_to_close <-- find_channel_to_close;
+            IF l_has_channel_to_close = TRUE
+            THEN
+                close_secure_channel(l_channel_to_close);
+                l_is_one_sc_closing := TRUE
+            END
+        END
+    END
+    ;
+
+    l_set_app_call_context_channel_config (p_channel) =
+    VAR
+        l_is_connected,
+        l_channel_config,
+        l_endpoint_config
+    IN
+        l_is_connected <-- is_connected_channel (p_channel);
+        IF l_is_connected = TRUE
+        THEN
+            l_channel_config <-- get_channel_info (p_channel);
+            l_endpoint_config <-- server_get_endpoint_config (p_channel);
+            set_app_call_context_channel_config (l_channel_config, l_endpoint_config)
+        END
+    END
+    ;
+
+    /* END OF LOCAL OPERATIONS */
+
+    valid_msg <-- receive_msg_buffer (channel, buffer, request_context) =
+    VAR
+        l_connected_channel,
+        l_is_client,
+        l_msg_type,
+        l_exp_msg_type,
+        l_valid_msg_type,
+        l_msg_header_type,
+        l_msg_service_class,
+        l_buffer_out,
+        l_valid_buffer_out,
+        l_valid_req_context,
+        l_valid_req,
+        l_async_resp,
+        l_valid_resp,
+        l_sc
+    IN
+        l_async_resp := FALSE;
+        valid_msg := FALSE;
+        l_connected_channel <-- is_connected_channel (channel);
+        l_msg_type <-- decode_msg_type (buffer);
+        l_valid_msg_type <-- is_valid_msg_in_type (l_msg_type);
+        IF l_connected_channel = TRUE &
+            l_valid_msg_type = TRUE
+        THEN
+            l_is_client <-- is_client_channel (channel);
+            l_msg_header_type <-- get_msg_header_type (l_msg_type);
+            l_msg_service_class <-- get_msg_service_class (l_msg_type);
+            l_set_app_call_context_channel_config (channel);
+            /* TODO: check that channel is secured if service class /= discovery class */
+            CASE l_msg_header_type OF
+                EITHER e_msg_request_type THEN
+                    l_valid_req := FALSE;
+                    l_valid_req_context <-- is_valid_request_context (request_context);
+                    IF l_is_client = FALSE &
+                        l_valid_req_context = TRUE
+                    THEN
+                        /* Server receiving a request: OK */
+                        CASE l_msg_service_class OF
+                            EITHER e_msg_session_treatment_class THEN
+                                l_valid_req, l_sc, l_buffer_out <-- server_receive_session_treatment_req (channel, l_msg_type, buffer)
+                            OR e_msg_session_service_class THEN
+                                l_valid_req, l_async_resp, l_sc, l_buffer_out <-- server_receive_session_service_req (channel, l_msg_type, request_context, buffer)
+                            OR e_msg_discovery_service_class THEN
+                                l_valid_req, l_sc, l_buffer_out <-- server_receive_discovery_service_req (channel, l_msg_type, buffer)
+                            ELSE /* INCLUDES e_msg_service_fault_class => unexpected response type */
+                                /* indet class */
+                                l_valid_req := FALSE;
+                                l_buffer_out := c_byte_buffer_indet;
+                                l_sc := c_StatusCode_indet
+                            END
+                        END;
+                        /* Send the response message on secure channel if available */
+                        l_valid_buffer_out <-- is_valid_buffer_out (l_buffer_out);
+                        IF l_valid_req = TRUE & l_valid_buffer_out = TRUE
+                        THEN
+                            send_channel_msg_buffer (channel, l_buffer_out, request_context)
+                        ELSIF l_valid_req = TRUE & l_async_resp = FALSE
+                        THEN
+                            /* Unexpected invalid buffer, it should lead to an Abort chunk */
+                            send_channel_error_msg(channel, l_sc, request_context)
+                        END
+                    ELSE
+                        /* Server receiving a response: close secure channel since it is not expected from client */
+                        close_secure_channel (channel)
+                    END;
+                    valid_msg := l_valid_req
+                OR e_msg_response_type THEN
+                    l_valid_resp := FALSE;
+                    IF l_is_client = TRUE
+                    THEN
+                        IF l_msg_service_class = e_msg_service_fault_class
+                        THEN
+                            /* Retrieve expected response type in case of service fault */
+                            l_valid_resp, l_exp_msg_type <-- client_service_fault_to_resp_type (buffer);
+                            l_msg_service_class <-- get_msg_service_class (l_exp_msg_type)
+                        ELSE
+                            l_valid_resp := TRUE
+                        END
+                        ;
+                        IF l_valid_resp = TRUE
+                        THEN
+                            /* Client receiving a response: OK */
+                            CASE l_msg_service_class OF
+                                EITHER e_msg_session_treatment_class THEN
+                                    client_receive_session_treatment_resp (channel, l_msg_type, buffer)
+                                OR e_msg_session_service_class THEN
+                                    client_receive_session_service_resp (channel, l_msg_type, buffer)
+                                OR e_msg_discovery_service_class THEN
+                                    client_receive_discovery_service_resp (channel, l_msg_type, buffer)
+                                OR e_msg_service_fault_class THEN
+                                    skip /* Already treated to be one of the previous cases */
+                                END
+                            END
+                        END
+                    ELSE
+                        /* Client receiving a request: close secure channel since it is not expected from server */
+                        close_secure_channel (channel)
+                    END;
+                    valid_msg := l_valid_resp
+                ELSE
+                    valid_msg := FALSE;
+                    /* Unknown message type: close the secure channel since it is not expected */
+                    close_secure_channel (channel)
+                END
+            END
+        END
+        ;
+        clear_app_call_context
+    END
+    ;
+
+    snd_msg_failure (channel, request_id, error_status) =
+    VAR
+        l_connected_channel,
+        l_is_client_channel,
+        l_request_handle
+    IN
+        l_connected_channel <-- is_connected_channel (channel);
+        IF l_connected_channel = TRUE
+        THEN
+            l_is_client_channel <-- is_client_channel (channel);
+            IF l_is_client_channel = TRUE
+            THEN
+                /* In this cas the request id was a request handle: allow to convert it */
+                l_request_handle <-- client_request_id_to_req_handle (request_id);
+                client_snd_msg_failure (channel, l_request_handle, error_status)
+            END
+            /* ELSE
+            Note: in case of server message not sent, session state could be inconsistent with sent message.
+            But it is necessary to have session id to close it
+            => reqId / reqHandle is not necessary unique on server side since client provided it
+            */
+        END
+    END
+    ;
+
+    client_request_timeout (channel, request_handle) =
+    VAR
+        l_connected_channel,
+        l_is_client_channel
+    IN
+        /* Ignore the message if the secure channel is not connected or not a client SC */
+        l_connected_channel <-- is_connected_channel (channel);
+        IF l_connected_channel = TRUE
+        THEN
+            l_is_client_channel <-- is_client_channel (channel);
+            IF l_is_client_channel = TRUE
+            THEN
+                client_snd_msg_failure (channel, request_handle, e_sc_bad_timeout)
+            END
+        END
+    END
+    ;
+
+    client_channel_connected_event (channel_config_idx, channel) =
+    VAR
+        l_bres
+    IN
+        l_bres <-- cli_set_connected_channel (channel_config_idx, channel);
+        IF l_bres = TRUE
+        THEN
+            client_channel_connected_event_session (channel_config_idx, channel);
+            client_channel_connected_event_discovery (channel_config_idx, channel)
+        END
+    END
+    ;
+
+    client_secure_channel_timeout (channel_config_idx) =
+    VAR
+        l_bres
+    IN
+        client_discovery_req_failures_on_final_connection_failure (channel_config_idx);
+        client_close_sessions_on_final_connection_failure (channel_config_idx);
+        l_bres <-- cli_set_connection_timeout_channel (channel_config_idx)
+        // No new (auto) attempt will be made to connect with this secure channel confix => close sessions waiting for it
+    END
+    ;
+
+    bres <-- server_channel_connected_event (endpoint_config_idx, channel_config_idx, channel) =
+    VAR
+        l_is_one_sc_closing
+    IN
+        l_is_one_sc_closing <-- l_may_close_secure_channel_without_session;
+        bres <-- srv_new_secure_channel (endpoint_config_idx, channel_config_idx, channel, l_is_one_sc_closing)
+    END
+    ;
+
+    bres <-- client_activate_new_session (channel_config_idx, p_user_token, app_context) =
+    VAR
+        l_channel,
+        l_connected_channel,
+        l_is_one_sc_closing
+    IN
+        bres <-- is_valid_channel_config_idx (channel_config_idx);
+        IF bres = TRUE
+        THEN
+            l_channel <-- get_connected_channel (channel_config_idx);
+            l_connected_channel <-- is_connected_channel (l_channel);
+            IF l_connected_channel = FALSE
+            THEN
+                l_is_one_sc_closing <-- l_may_close_secure_channel_without_session;
+                bres <-- cli_open_secure_channel (channel_config_idx, l_is_one_sc_closing);
+                IF bres = TRUE
+                THEN
+                    /* No connected channel: will trigger create session and then activate session events asynchronously */
+                    bres <-- client_async_activate_new_session_without_channel (channel_config_idx, p_user_token, app_context)
+                END
+            ELSE
+                /* Already connected channel: will trigger a create session event synchronously
+                and then activate session event asynchronously */
+                bres <-- client_async_activate_new_session_with_channel (channel_config_idx, l_channel, p_user_token, app_context)
+            END
+        END
+    END
+    ;
+
+    client_reactivate_session_new_user (session, p_user_token) =
+    VAR
+        l_valid_session,
+        l_ret,
+        l_channel,
+        l_connected_channel,
+        l_buffer_out,
+        l_valid_buffer_out,
+        l_req_handle,
+        l_req_handle_in_req_id
+    IN
+        l_valid_session <-- is_valid_session (session);
+        IF l_valid_session = TRUE
+        THEN
+            l_ret, l_channel, l_buffer_out, l_req_handle <-- client_service_activate_session (session, p_user_token);
+            IF l_ret = e_sc_ok
+            THEN
+                l_connected_channel <-- is_connected_channel (l_channel);
+                l_valid_buffer_out <-- is_valid_buffer_out (l_buffer_out);
+                IF l_connected_channel = TRUE &
+                    l_valid_buffer_out = TRUE
+                THEN
+                    /* Since request Id is not used on client side, store req handle for context in case of snd failure */
+                    l_req_handle_in_req_id <-- client_req_handle_to_request_id (l_req_handle);
+                    send_channel_msg_buffer (l_channel, l_buffer_out, l_req_handle_in_req_id)
+                END
+            END // ELSE: session closed by client_service_activate_session in case of error
+        END
+    END
+    ;
+
+    ret <-- client_send_service_request (session, req_msg, app_context) =
+    VAR
+        l_valid_session,
+        l_valid_msg,
+        l_msg_typ,
+        l_channel,
+        l_connected_channel,
+        l_buffer_out,
+        l_valid_buffer_out,
+        l_req_handle,
+        l_req_handle_in_req_id
+    IN
+        l_valid_session <-- is_valid_session (session);
+        l_valid_msg, l_msg_typ <-- is_valid_app_msg_out (req_msg);
+        IF l_valid_session = TRUE & l_valid_msg = TRUE
+        THEN
+            ret, l_channel, l_buffer_out, l_req_handle <-- client_service_request (session, req_msg, app_context);
+            IF ret = e_sc_ok
+            THEN
+                /* TODO: remove since it is guaranteed by obligation proof of client_service_request result (ret = ok) ? */
+                l_connected_channel <-- is_connected_channel (l_channel);
+                l_valid_buffer_out <-- is_valid_buffer_out (l_buffer_out);
+                IF l_connected_channel = TRUE &
+                    l_valid_buffer_out = TRUE
+                THEN
+                    /* Since request Id is not used on client side, store req handle for context in case of snd failure */
+                    l_req_handle_in_req_id <-- client_req_handle_to_request_id (l_req_handle);
+                    send_channel_msg_buffer (l_channel, l_buffer_out, l_req_handle_in_req_id)
+                END
+            END
+        ELSE
+            ret := e_sc_bad_invalid_argument;
+            IF l_valid_msg = TRUE
+            THEN
+                /* Guarantee deallocation in error case */
+                bless_msg_out (req_msg);
+                dealloc_msg_out (req_msg)
+            END
+        END
+    END
+    ;
+
+    ret <-- client_send_discovery_request (channel_config_idx, req_msg, app_context) =
+    VAR
+        l_valid_msg,
+        l_msg_typ,
+        l_valid_channel_config,
+        l_bres,
+        l_channel,
+        l_connected_channel,
+        l_buffer_out,
+        l_req_handle,
+        l_req_handle_in_req_id,
+        l_is_one_sc_closing
+    IN
+        l_valid_msg, l_msg_typ <-- is_valid_app_msg_out (req_msg);
+        l_valid_channel_config <-- is_valid_channel_config_idx (channel_config_idx);
+        IF l_valid_msg = TRUE & l_valid_channel_config = TRUE
+        THEN
+            l_channel <-- get_connected_channel (channel_config_idx);
+            l_connected_channel <-- is_connected_channel (l_channel);
+            IF l_connected_channel = FALSE
+            THEN
+                l_is_one_sc_closing <-- l_may_close_secure_channel_without_session;
+                l_bres <-- cli_open_secure_channel (channel_config_idx, l_is_one_sc_closing);
+                IF l_bres = TRUE
+                THEN
+                    /* No connected channel: will trigger to send discovery request on channel connection event */
+                    l_bres <-- client_async_discovery_request_without_channel (channel_config_idx, req_msg, app_context);
+                    IF l_bres = TRUE
+                    THEN
+                        ret := e_sc_ok
+                    ELSE
+                        /* Guarantee deallocation in error case */
+                        bless_msg_out (req_msg);
+                        dealloc_msg_out (req_msg);
+                        ret := e_sc_bad_too_many_ops /* Too many requests already recorded to be sent when SC will be connected */
+                    END
+                ELSE
+                    ret := e_sc_bad_generic /* Invalid channel config idx OR maximum channels opened reached */
+                END
+            ELSE
+                /* Already connected channel: will trigger a create session event synchronously
+                and then activate session event asynchronously */
+                ret, l_buffer_out, l_req_handle <-- client_discovery_service_request (l_channel, req_msg, app_context);
+                IF ret = e_sc_ok
+                THEN
+                    /* Since request Id is not used on client side, store req handle for context in case of snd failure */
+                    l_req_handle_in_req_id <-- client_req_handle_to_request_id (l_req_handle);
+                    send_channel_msg_buffer (l_channel, l_buffer_out, l_req_handle_in_req_id)
+                END
+            END
+        ELSE
+            ret := e_sc_bad_invalid_argument;
+            IF l_valid_msg = TRUE
+            THEN
+                /* Guarantee deallocation in error case */
+                bless_msg_out (req_msg);
+                dealloc_msg_out (req_msg)
+            END
+        END
+    END
+    ;
+
+    ret <-- server_treat_local_service_request (endpoint_config_idx, req_msg, app_context) =
+    VAR
+        l_valid_msg,
+        l_msg_typ,
+        l_msg_service_class,
+        l_valid_endpoint_config
+    IN
+        ret := e_sc_bad_invalid_argument;
+        l_valid_msg, l_msg_typ <-- is_valid_app_msg_in (req_msg);
+        l_valid_endpoint_config <-- is_valid_endpoint_config_idx (endpoint_config_idx);
+        IF l_valid_msg = TRUE & l_valid_endpoint_config = TRUE
+        THEN
+            l_msg_service_class <-- get_msg_service_class (l_msg_typ);
+            ret <-- server_receive_local_service_req  (endpoint_config_idx, l_msg_service_class, l_msg_typ, req_msg, app_context)
+        END
+    END
+    ;
+
+    ret <-- client_send_close_session_request (session) =
+    VAR
+        l_valid_session,
+        l_channel,
+        l_connected_channel,
+        l_buffer_out,
+        l_valid_buffer_out,
+        l_req_handle,
+        l_req_handle_in_req_id
+    IN
+        l_valid_session <-- is_valid_session (session);
+        IF l_valid_session = TRUE
+        THEN
+            ret, l_channel, l_buffer_out, l_req_handle <-- client_service_close_session (session);
+            IF ret = e_sc_ok
+            THEN
+                l_connected_channel <-- is_connected_channel (l_channel);
+                l_valid_buffer_out <-- is_valid_buffer_out (l_buffer_out);
+                IF l_connected_channel = TRUE &
+                    l_valid_buffer_out = TRUE
+                THEN
+                    /* Since request Id is not used on client side, store req handle for context in case of snd failure */
+                    l_req_handle_in_req_id <-- client_req_handle_to_request_id (l_req_handle);
+                    send_channel_msg_buffer (l_channel, l_buffer_out, l_req_handle_in_req_id)
+                END
+            END
+        ELSE
+            ret := e_sc_bad_invalid_argument
+        END
+    END
+    ;
+
+    internal_client_create_session (session, channel_config_idx) =
+    VAR
+        l_channel,
+        l_connected_channel,
+        l_buffer_out,
+        l_valid_buffer_out,
+        l_req_handle,
+        l_req_handle_in_req_id
+    IN
+        l_channel <-- get_connected_channel (channel_config_idx);
+        l_connected_channel <-- is_connected_channel (l_channel);
+        IF l_connected_channel = FALSE
+        THEN
+            /* In case internal event to create session cannot be done => close session */
+            client_close_session (session, e_sc_bad_secure_channel_closed)
+        ELSE
+            l_buffer_out, l_req_handle <-- client_service_create_session (session, l_channel);
+            /* Send the response message on secure channel if available */
+            l_valid_buffer_out <-- is_valid_buffer_out (l_buffer_out);
+            IF l_valid_buffer_out = TRUE
+            THEN
+                /* Since request Id is not used on client side, store req handle for context in case of snd failure */
+                l_req_handle_in_req_id <-- client_req_handle_to_request_id (l_req_handle);
+                send_channel_msg_buffer (l_channel, l_buffer_out, l_req_handle_in_req_id)
+            END
+        END
+    END
+    ;
+
+    internal_client_activate_orphaned_session (session, channel_config_idx) =
+    VAR
+        l_channel,
+        l_connected_channel,
+        l_buffer_out,
+        l_valid_buffer_out,
+        l_req_handle,
+        l_req_handle_in_req_id
+    IN
+        l_channel <-- get_connected_channel (channel_config_idx);
+        l_connected_channel <-- is_connected_channel (l_channel);
+        IF l_connected_channel = TRUE
+        THEN
+            l_buffer_out, l_req_handle <-- client_service_activate_orphaned_session (session, l_channel);
+            l_valid_buffer_out <-- is_valid_buffer_out (l_buffer_out);
+            IF l_valid_buffer_out = TRUE
+            THEN
+                /* Since request Id is not used on client side, store req handle for context in case of snd failure */
+                l_req_handle_in_req_id <-- client_req_handle_to_request_id (l_req_handle);
+                send_channel_msg_buffer (l_channel, l_buffer_out, l_req_handle_in_req_id)
+            END
+        END
+    END
+    ;
+
+    internal_server_evaluate_session_timeout (session) =
+    BEGIN
+        server_evaluate_session_timeout (session)
+    END
+    ;
+
+    secure_channel_lost (channel) =
+    VAR
+        l_connected_channel,
+        l_disconnecting_channel,
+        l_valid_new_channel,
+        l_is_client,
+        l_channel_config_idx,
+        l_new_channel,
+        l_bres,
+        l_is_one_sc_closing
+    IN
+        l_connected_channel <-- is_connected_channel (channel);
+        IF l_connected_channel = TRUE
+        THEN
+            l_is_client <-- is_client_channel (channel);
+            IF l_is_client = TRUE
+            THEN
+                l_channel_config_idx <-- get_channel_info (channel);
+                ASSERT l_channel_config_idx : t_channel_config_idx
+                THEN
+                    l_disconnecting_channel <-- is_disconnecting_channel (l_channel_config_idx);
+                    client_secure_channel_lost_session_sm (channel, l_channel_config_idx);
+                    IF l_disconnecting_channel = FALSE
+                    THEN
+                        // attempt to reconnect channel
+                        l_new_channel <-- get_connected_channel (l_channel_config_idx);
+                        IF l_new_channel = c_channel_indet
+                        THEN
+                            l_is_one_sc_closing <-- l_may_close_secure_channel_without_session;
+                            l_bres <-- cli_open_secure_channel (l_channel_config_idx, l_is_one_sc_closing)
+                            // async operation => cannot use channel until connection is effective ?
+                        END;
+
+                        l_valid_new_channel <-- is_connected_channel (l_new_channel);
+
+                        IF l_valid_new_channel = TRUE
+                        THEN
+                            client_channel_connected_event_session (l_channel_config_idx, l_new_channel)
+                        END
+                    END
+                END
+            ELSE
+                server_secure_channel_lost_session_sm (channel)
+            END;
+            channel_lost (channel)
+        END
+    END
+    ;
+
+    bres <-- internal_server_data_changed (p_old_write_value_pointer, p_new_write_value_pointer) =
+    VAR
+        l_old_valid_pointer,
+        l_new_valid_pointer
+    IN
+        l_old_valid_pointer <-- write_value_pointer_is_valid (p_old_write_value_pointer);
+        l_new_valid_pointer <-- write_value_pointer_is_valid (p_new_write_value_pointer);
+        IF l_old_valid_pointer = TRUE & l_new_valid_pointer = TRUE
+        THEN
+            server_subscription_data_changed (p_old_write_value_pointer, p_new_write_value_pointer);
+            bres := TRUE
+        ELSE
+            bres := FALSE
+        END
+    END;
+
+    bres <-- internal_server_subscription_publish_timeout (p_subscription) =
+    VAR
+        l_valid_subscription
+    IN
+        l_valid_subscription <-- is_valid_subscription (p_subscription);
+        IF l_valid_subscription = TRUE
+        THEN
+            server_subscription_publish_timeout (p_subscription);
+            bres := TRUE
+        ELSE
+            bres := FALSE
+        END
+    END;
+
+    bres <-- internal_server_send_publish_response_prio_event (p_session, p_req_handle, p_req_context, p_publish_resp_msg, p_statusCode) =
+    VAR
+        l_valid_session,
+        l_valid_msg,
+        l_msg_typ,
+        l_valid_req_context,
+        l_buffer_out,
+        l_sc,
+        l_channel,
+        l_connected_channel
+    IN
+        l_valid_session <-- is_valid_session (p_session);
+        l_valid_msg, l_msg_typ <-- is_valid_app_msg_out (p_publish_resp_msg);
+        l_valid_req_context <-- is_valid_request_context (p_req_context);
+        IF l_valid_session = TRUE & l_valid_msg = TRUE & l_msg_typ = e_msg_subscription_publish_resp &
+            l_valid_req_context = TRUE & p_statusCode /= c_StatusCode_indet
+        THEN
+            bres, l_sc, l_buffer_out, l_channel
+              <-- server_send_publish_response (p_session, p_req_handle, p_statusCode, l_msg_typ, p_publish_resp_msg);
+            l_connected_channel <-- is_connected_channel (l_channel);
+            IF bres = TRUE & l_connected_channel = TRUE
+            THEN
+                send_channel_msg_buffer (l_channel, l_buffer_out, p_req_context)
+            ELSIF l_connected_channel = TRUE
+            THEN
+                /* Unexpected invalid buffer, it should lead to an Abort chunk */
+                send_channel_error_msg(l_channel, l_sc, p_req_context)
+                // Note: keep bres = FALSE, it will generate a log error
+            END
+        ELSE
+            bres := FALSE
+        END
+    END
+    ;
+
+    bres <-- close_all_active_connections(p_clientOnly) =
+    BEGIN
+        bres <-- close_all_channel(p_clientOnly)
+    END
+    ;
+
+    UNINITIALISATION =
+    BEGIN
+        service_mgr_UNINITIALISATION
+    END
+
+END

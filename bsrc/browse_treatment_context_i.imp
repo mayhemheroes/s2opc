@@ -1,0 +1,207 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+IMPLEMENTATION
+   browse_treatment_context_i
+REFINES
+   browse_treatment_context
+IMPORTS
+   browse_treatment_context_bs
+SEES
+    constants,
+    constants_statuscodes_bs,
+    node_id_pointer_bs
+
+
+CONCRETE_VARIABLES
+    in_startIndex_i,
+    in_session_i,
+    in_maxReferencesPerNode_i,
+    in_BrowseView_i,
+    in_BrowseValue_NodeId_i,
+    in_BrowseValue_BrowseDirection_i,
+    in_BrowseValue_ReferenceTypeId_i,
+    in_BrowseValue_IncludeSubtypes_i,
+    in_BrowseValue_NodeClassMask_i,
+    in_BrowseValue_ResultMask_i,
+    in_ReleasePrevContinuationPoint_i,
+    isBrowseValueContextDefined_i
+
+INVARIANT
+    in_startIndex_i : NAT &
+    in_startIndex = in_startIndex_i &
+
+    in_session_i : t_session_i &
+    in_session = in_session_i &
+
+    in_maxReferencesPerNode_i : NAT &
+    in_maxReferencesPerNode = in_maxReferencesPerNode_i &
+
+    in_BrowseView_i : t_NodeId_i &
+    in_BrowseView_i = in_BrowseView &
+
+    in_BrowseValue_NodeId_i : t_NodeId_i &
+    in_BrowseValue_NodeId_i = in_BrowseValue_NodeId &
+
+    in_BrowseValue_BrowseDirection_i : t_BrowseDirection_i &
+    in_BrowseValue_BrowseDirection = in_BrowseValue_BrowseDirection_i &
+
+    in_BrowseValue_ReferenceTypeId_i : t_NodeId_i &
+    in_BrowseValue_ReferenceTypeId_i = in_BrowseValue_ReferenceTypeId &
+
+    in_BrowseValue_IncludeSubtypes_i : BOOL &
+    in_BrowseValue_IncludeSubtypes_i = in_BrowseValue_IncludeSubtypes &
+
+    in_BrowseValue_NodeClassMask_i : t_BrowseNodeClassMask_i &
+    in_BrowseValue_NodeClassMask_i = in_BrowseValue_NodeClassMask &
+
+    in_BrowseValue_ResultMask_i : t_BrowseResultMask_i &
+    in_BrowseValue_ResultMask_i = in_BrowseValue_ResultMask &
+
+    in_ReleasePrevContinuationPoint_i : BOOL &
+    in_ReleasePrevContinuationPoint_i = in_ReleasePrevContinuationPoint &
+
+    isBrowseValueContextDefined_i : BOOL &
+    isBrowseValueContextDefined_i = isBrowseValueContextDefined
+
+INITIALISATION
+
+    in_startIndex_i := 0;
+    in_session_i := c_session_indet;
+    in_maxReferencesPerNode_i := 0;
+    in_BrowseView_i := c_NodeId_indet;
+    in_BrowseValue_NodeId_i := c_NodeId_indet;
+    in_BrowseValue_BrowseDirection_i := e_bd_indet;
+    in_BrowseValue_ReferenceTypeId_i := c_NodeId_indet;
+    in_BrowseValue_IncludeSubtypes_i := FALSE;
+    in_BrowseValue_NodeClassMask_i := c_BrowseNodeClassMask_indet;
+    in_BrowseValue_ResultMask_i := c_BrowseResultMask_indet;
+    in_ReleasePrevContinuationPoint_i := FALSE;
+    isBrowseValueContextDefined_i := FALSE
+LOCAL_OPERATIONS
+
+    local_clear_browse_value_context =
+    BEGIN
+        in_startIndex_i := 0 ||
+        in_session_i := c_session_indet ||
+        in_maxReferencesPerNode_i := 0 ||
+        in_BrowseView_i := c_NodeId_indet ||
+        in_BrowseValue_NodeId_i := c_NodeId_indet ||
+        in_BrowseValue_BrowseDirection_i := e_bd_indet ||
+        in_BrowseValue_ReferenceTypeId_i := c_NodeId_indet ||
+        in_BrowseValue_IncludeSubtypes_i := FALSE ||
+        in_BrowseValue_NodeClassMask_i := c_BrowseNodeClassMask_indet ||
+        in_BrowseValue_ResultMask_i := c_BrowseResultMask_indet ||
+        in_ReleasePrevContinuationPoint_i := FALSE ||
+        isBrowseValueContextDefined_i := FALSE
+    END
+
+OPERATIONS
+
+   /* LOCAL OPERATIONS */
+
+   local_clear_browse_value_context =
+   BEGIN
+        in_startIndex_i := 0;
+        in_session_i := c_session_indet;
+        in_maxReferencesPerNode_i := 0;
+        free_node_id_pointer (in_BrowseView_i);
+        in_BrowseView_i := c_NodeId_indet;
+        free_node_id_pointer (in_BrowseValue_NodeId_i);
+        in_BrowseValue_NodeId_i := c_NodeId_indet;
+        in_BrowseValue_BrowseDirection_i := e_bd_indet;
+        free_node_id_pointer (in_BrowseValue_ReferenceTypeId_i);
+        in_BrowseValue_ReferenceTypeId_i := c_NodeId_indet;
+        in_BrowseValue_IncludeSubtypes_i := FALSE;
+        in_BrowseValue_NodeClassMask_i := c_BrowseNodeClassMask_indet;
+        in_BrowseValue_ResultMask_i := c_BrowseResultMask_indet;
+        in_ReleasePrevContinuationPoint_i := FALSE;
+        isBrowseValueContextDefined_i := FALSE
+   END
+   ;
+
+   /* END OF LOCAL OPERATIONS */
+
+   p_service_StatusCode <-- setall_browse_value_context (p_startIndex, p_session, p_maxTargetRef,
+                                                         p_browseView, p_nodeId, p_browseDirection,
+                                                         p_referenceType, p_includeSubtypes,
+                                                         p_nodeClassMask, p_resultMask, p_autoReleaseCP) =
+   VAR
+       l_bresView,
+       l_bresSrc,
+       l_bresRef
+   IN
+        l_bresView, in_BrowseView_i <-- copy_node_id_pointer_content (p_browseView);
+        l_bresSrc, in_BrowseValue_NodeId_i <-- copy_node_id_pointer_content (p_nodeId);
+        l_bresRef, in_BrowseValue_ReferenceTypeId_i <-- copy_node_id_pointer_content (p_referenceType);
+        in_startIndex_i := p_startIndex;
+        in_session_i := p_session;
+        in_maxReferencesPerNode_i := p_maxTargetRef;
+        in_BrowseValue_BrowseDirection_i := p_browseDirection;
+        in_BrowseValue_IncludeSubtypes_i := p_includeSubtypes;
+        in_BrowseValue_NodeClassMask_i := p_nodeClassMask;
+        in_BrowseValue_ResultMask_i := p_resultMask;
+        in_ReleasePrevContinuationPoint_i := p_autoReleaseCP;
+        isBrowseValueContextDefined_i := TRUE;
+        IF l_bresView = TRUE & l_bresSrc = TRUE & l_bresRef = TRUE
+        THEN
+            p_service_StatusCode := e_sc_ok
+        ELSE
+            p_service_StatusCode := e_sc_bad_out_of_memory;
+            local_clear_browse_value_context
+        END
+    END
+   ;
+
+   p_startIndex, p_session, p_maxTargetRef, p_browseView, p_nodeId,
+   p_browseDirection, p_refType_defined, p_referenceType, p_includeSubtypes,
+   p_nodeClassMask, p_resultMask, p_autoReleaseCP
+      <-- getall_browse_value_context =
+   BEGIN
+        p_startIndex := in_startIndex_i;
+        p_session := in_session_i;
+        p_maxTargetRef := in_maxReferencesPerNode_i;
+        p_browseView := in_BrowseView_i;
+        p_nodeId := in_BrowseValue_NodeId_i;
+        p_browseDirection := in_BrowseValue_BrowseDirection_i;
+        p_refType_defined := bool(in_BrowseValue_ReferenceTypeId_i /= c_NodeId_indet);
+        p_referenceType := in_BrowseValue_ReferenceTypeId_i;
+        p_includeSubtypes := in_BrowseValue_IncludeSubtypes_i;
+        p_nodeClassMask := in_BrowseValue_NodeClassMask_i;
+        p_resultMask := in_BrowseValue_ResultMask_i;
+        p_autoReleaseCP := in_ReleasePrevContinuationPoint_i
+   END
+   ;
+
+   bres <-- is_NodeClass_in_NodeClassMask(p_nodeClass) =
+   BEGIN
+       IF p_nodeClass = c_NodeClass_indet THEN
+           bres := TRUE /* Since we do not know the class we shall not filter the node */
+       ELSE
+           bres <-- is_NodeClass_in_NodeClassMask_bs(p_nodeClass, in_BrowseValue_NodeClassMask_i)
+       END
+   END
+   ;
+
+   clear_browse_value_context =
+   BEGIN
+        local_clear_browse_value_context
+   END
+
+END

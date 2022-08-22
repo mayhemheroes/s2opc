@@ -1,0 +1,98 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+IMPLEMENTATION
+    constants_i
+REFINES
+    constants
+
+EXTENDS
+    constants_bs
+
+PROPERTIES
+
+    t_ReadValue = 1..k_n_read_resp_max &
+    cast_t_ReadValue = id(t_ReadValue) &
+
+    t_WriteValue = 1..k_n_WriteResponse_max &
+    cast_t_WriteValue = id(t_WriteValue) &
+
+    t_BrowseValue = 1..k_n_BrowseResponse_max &
+    cast_t_BrowseValue = id(t_BrowseValue) &
+
+    t_monitoredItemReqIndex = 1..k_n_monitoredItem_max &
+
+    t_monitoredItemNotifIndex = 1..k_n_monitoredItemNotif_max &
+
+    t_registerNodesReqIndex = 1..k_n_registerNodes_max &
+    t_unregisterNodesReqIndex = 1..k_n_unregisterNodes_max
+
+VALUES
+
+    t_ReadValue_i = 0..k_n_read_resp_max;
+    t_WriteValue_i = 0..k_n_WriteResponse_max;
+    t_BrowseValue_i = 0..k_n_BrowseResponse_max;
+    t_BrowsePathResPerElt_i = 0..k_n_BrowsePathResPerElt_max;
+
+    c_ReadValue_indet = 0;
+    c_WriteValue_indet = 0;
+    c_BrowseValue_indet = 0;
+
+    c_ValueRank_OneDimension = 1;
+    c_ValueRank_OneOrMoreDimensions = 0;
+    c_ValueRank_Scalar = -1;
+    c_ValueRank_Any = -2;
+    c_ValueRank_ScalarOrOneDimension = -3;
+
+    t_counter = NAT;
+    t_ValueRank = INT;
+    t_ConcreteValueRank = INT
+
+OPERATIONS
+
+    rvi <-- read_cast_t_ReadValue(ii) =
+    BEGIN
+        rvi := ii
+    END
+    ;
+
+    wvi <-- get_cast_t_WriteValue(ii) =
+    BEGIN
+        wvi := ii
+    END
+    ;
+
+    p_bvi <-- get_cast_t_BrowseValue(p_ind) =
+    BEGIN
+        p_bvi := p_ind
+    END
+    ;
+
+    p_dir_compat <-- get_Is_Dir_Forward_Compatible(p_dir, p_IsForward) =
+    CASE p_dir OF
+        EITHER e_bd_forward THEN
+            p_dir_compat := p_IsForward
+        OR e_bd_inverse THEN
+            p_dir_compat := bool(p_IsForward = FALSE)
+        ELSE
+            p_dir_compat := TRUE
+        END
+    END
+
+END

@@ -1,0 +1,199 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+IMPLEMENTATION
+    session_core_2_i
+
+REFINES
+    session_core_2
+
+SEES
+    constants,
+    request_handle_bs,
+    message_out_bs,
+    message_in_bs,
+    channel_mgr
+
+CONCRETE_VARIABLES
+    s_session_i,
+    a_state_i,
+    a_channel_i,
+    a_reverse_channel_i,
+    a_client_to_create_i,
+    a_client_orphaned_i,
+    a_server_client_locales_i
+
+INVARIANT
+    s_session_i          : t_session_i --> BOOL                                      &
+    a_state_i            : t_session_i --> t_sessionState                            &
+    a_channel_i          : t_session_i --> t_channel_i                               &
+    a_reverse_channel_i  : t_channel_i --> t_session_i                               &
+    a_client_to_create_i : t_session_i --> t_channel_config_idx_i                    &
+    a_client_orphaned_i  : t_session_i --> t_channel_config_idx_i                    &
+    a_server_client_locales_i : t_session_i --> t_LocaleIds_i                        &
+    s_session            = s_session_i~[{TRUE}]                                      &
+    dom(a_state)         = s_session                                                 &
+    a_state             <: a_state_i                                                 &
+    a_channel            = t_session <| a_channel_i |> t_channel                     &
+    a_channel~           = t_channel <| a_reverse_channel_i |> t_session             &
+    a_client_to_create   = t_session <| a_client_to_create_i |> t_channel_config_idx &
+    a_client_orphaned    = t_session <| a_client_orphaned_i |> t_channel_config_idx  &
+    a_server_client_locales = t_session <| a_server_client_locales_i
+
+INITIALISATION
+    s_session_i  := t_session_i * {FALSE};
+    a_state_i    := t_session_i * {e_session_closed};
+    a_channel_i  := t_session_i * {c_channel_indet};
+    a_reverse_channel_i := t_channel_i * {c_session_indet};
+    a_client_to_create_i := t_session_i * {c_channel_config_idx_indet};
+    a_client_orphaned_i := t_session_i * {c_channel_config_idx_indet};
+    a_server_client_locales_i := t_session_i * {c_LocaleIds_empty}
+
+OPERATIONS
+
+    add_session(p_session, p_state) =
+    BEGIN
+        s_session_i(p_session) := TRUE;
+        a_state_i  (p_session) := p_state
+    END
+    ;
+
+    remove_session(p_session) =
+    BEGIN
+        s_session_i(p_session) := FALSE
+    END
+    ;
+
+    reset_session_channel(p_session) =
+    BEGIN
+        a_reverse_channel_i(a_channel_i(p_session)) := c_session_indet;
+        a_channel_i(p_session) := c_channel_indet
+    END
+    ;
+
+    reset_session_to_create(p_session) =
+    BEGIN
+        a_client_to_create_i(p_session) := c_channel_config_idx_indet
+    END
+    ;
+
+    reset_session_orphaned(p_session) =
+    BEGIN
+        a_client_orphaned_i(p_session) := c_channel_config_idx_indet
+    END
+    ;
+
+    ret <-- is_valid_session (session) =
+    BEGIN
+        ret := s_session_i(session)
+    END
+    ;
+
+    state <-- get_session_state (session) =
+    BEGIN
+        state := a_state_i(session)
+    END
+    ;
+
+    set_session_state_1(p_session, p_state) =
+    BEGIN
+        a_state_i(p_session) := p_state
+    END
+    ;
+
+    set_session_channel (session, channel) =
+    BEGIN
+        a_reverse_channel_i(a_channel_i(session)) := c_session_indet;
+        a_channel_i(session) := channel;
+        a_reverse_channel_i(channel) := session
+    END
+    ;
+
+    p_dom, p_channel <-- getall_session_channel (p_session) =
+    BEGIN
+        p_channel := a_channel_i(p_session);
+        p_dom <-- is_t_channel(p_channel)
+    END
+    ;
+
+    channel <-- get_session_channel (session) =
+    BEGIN
+        channel := a_channel_i(session)
+    END
+    ;
+
+    p_session <-- get_channel_session (p_channel) =
+    BEGIN
+        p_session := a_reverse_channel_i(p_channel)
+    END
+    ;
+
+    p_dom, p_channel_config_idx <-- getall_to_create(p_session) =
+    BEGIN
+        p_channel_config_idx := a_client_to_create_i(p_session);
+        p_dom <-- is_t_channel_config_idx(p_channel_config_idx)
+    END
+    ;
+
+    p_dom, p_channel_config_idx <-- getall_orphaned(p_session) =
+    BEGIN
+        p_channel_config_idx := a_client_orphaned_i(p_session);
+        p_dom <-- is_t_channel_config_idx(p_channel_config_idx)
+    END
+    ;
+
+    set_session_to_create(p_session, p_channel_config_idx) =
+    BEGIN
+        a_client_to_create_i(p_session) := p_channel_config_idx
+    END
+    ;
+
+    set_session_orphaned_1(p_session, p_channel_config_idx) =
+    BEGIN
+        a_client_orphaned_i(p_session) := p_channel_config_idx
+    END;
+
+    set_server_session_preferred_locales(p_session, p_localesIds) =
+    BEGIN
+        a_server_client_locales_i(p_session) := p_localesIds
+    END
+    ;
+
+    p_localeIds <-- get_server_session_preferred_locales(p_session) =
+    BEGIN
+        p_localeIds := a_server_client_locales_i(p_session)
+    END
+    ;
+
+    p_localeIds <-- reset_server_session_preferred_locales(p_session) =
+    VAR
+        l_old_localeIds
+    IN
+        l_old_localeIds := a_server_client_locales_i(p_session);
+        IF l_old_localeIds = c_LocaleIds_empty
+        THEN
+            p_localeIds := c_LocaleIds_indet
+        ELSE
+            p_localeIds := l_old_localeIds
+        END
+        ;
+        a_server_client_locales_i(p_session) := c_LocaleIds_empty
+    END
+
+END

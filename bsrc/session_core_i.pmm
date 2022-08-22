@@ -1,0 +1,74 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+THEORY User_Pass IS
+  ff(0) & mp(Tac(Simp_Delete))
+;
+  ff(0) & mp(Tac(ContradictingState))
+;
+  Pattern(#a.b or c) &
+    ff(0) & mp(Tac(Simp_Delete)) & ar(SplitOr.2,Once) & mp(Tac(Simp_Delete))
+;
+  Pattern(#a.b or c) &
+    ff(0) & mp(Tac(Simp_Delete)) & ar(SplitOr.1,Once) &
+      dd(0) & se(l_nsession$1,l_request_handle) & mp
+END
+
+&
+
+THEORY Simp_Delete IS
+
+  band(binhyp(not(x: A)),
+       binhyp(r: B +-> A)) &
+  blvar(Q) & Q\(x,r)
+  =>
+  r|>>{x} == r
+;
+  binhyp(not(x: dom(r))) &
+  band(binhyp(not(y: A)),
+       binhyp(r: B +-> A)) &
+  blvar(Q) & Q\(x,y,r)
+  =>
+  r<+{x|->y}|>>{y} == r
+;
+  band(binhyp(not(x: A)),
+       binhyp(r: A <-> B)) &
+  blvar(Q) & Q\(x,r)
+  =>
+  {x}<<|(r<+{x|->y}) == r
+;
+  band(binhyp(not(x: A)),
+       binhyp(r: A <-> B)) &
+  blvar(Q) & Q\(x,r)
+  =>
+  {x}<<|r == r
+
+END
+
+&
+
+THEORY ContradictingState IS
+
+  band(binhyp(a = b),
+  band(binhyp(a = c), bnot(bpattern(b,c)))) &  /* TODO improve */
+  not(b = c)
+  =>
+  G
+
+END

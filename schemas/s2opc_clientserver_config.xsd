@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="S2OPC" type="S2OPCType"/>
+  <xs:simpleType name="SecurityURI">
+    <xs:restriction base="xs:anyURI">
+      <xs:enumeration value="http://opcfoundation.org/UA/SecurityPolicy#None"/>
+      <xs:enumeration value="http://opcfoundation.org/UA/SecurityPolicy#Basic256"/>
+      <xs:enumeration value="http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256"/>
+      <xs:enumeration value="http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep"/>
+      <xs:enumeration value="http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="SecurityMode">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="None"/>
+      <xs:enumeration value="Sign"/>
+      <xs:enumeration value="SignAndEncrypt"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="TokenType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="anonymous"/>
+      <xs:enumeration value="username"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:complexType name="NamespaceType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute type="xs:anyURI" name="uri" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="NamespacesType">
+    <xs:sequence>
+      <xs:element type="NamespaceType" name="Namespace" minOccurs="1" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="LocaleType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute type="xs:string" name="id" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="LocalesType">
+    <xs:sequence>
+      <xs:element type="LocaleType" name="Locale" minOccurs="1" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ServerCertificateType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute type="xs:string" name="path" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="ServerKeyType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute type="xs:string" name="path" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="IssuerType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute type="xs:string" name="cert_path" use="required"/>
+        <xs:attribute type="xs:string" name="revocation_list_path" use="required"/>
+        <xs:attribute type="xs:boolean" name="root" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="TrustedIssuersType">
+    <xs:sequence>
+      <xs:element type="IssuerType" name="TrustedIssuer" maxOccurs="unbounded">
+        <xs:annotation>
+          <xs:documentation>One or several trusted certificate authorities</xs:documentation>
+        </xs:annotation>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="IssuedCertificateType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute type="xs:string" name="path" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="IssuedCertificatesType">
+    <xs:sequence>
+      <xs:element type="IssuedCertificateType" name="IssuedCertificate" maxOccurs="unbounded">
+        <xs:annotation>
+          <xs:documentation>One or several explicitly trusted certificates issued by provided issuers or self-signed</xs:documentation>
+        </xs:annotation>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="UntrustedIssuersType">
+    <xs:sequence>
+      <xs:element type="IssuerType" name="UntrustedIssuer" maxOccurs="unbounded">
+        <xs:annotation>
+          <xs:documentation>One or several untrusted certificate authorities. Those are only used to validate trust chain of issued certificate.</xs:documentation>
+        </xs:annotation>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ApplicationCertificatesType">
+    <xs:sequence>
+      <xs:element type="ServerCertificateType" name="ServerCertificate" />
+      <xs:element type="ServerKeyType" name="ServerKey" />
+      <xs:element type="TrustedIssuersType" name="TrustedIssuers" minOccurs="0"/>
+      <xs:element type="IssuedCertificatesType" name="IssuedCertificates" minOccurs="0">
+        <xs:annotation>
+          <xs:documentation>At least one shall be filled in either TrustedIssuers or IssuedCertificates</xs:documentation>
+        </xs:annotation>
+      </xs:element>
+      <xs:element type="UntrustedIssuersType" name="UntrustedIssuers" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ApplicationURIType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute type="xs:anyURI" name="uri" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="ProductURIType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute type="xs:anyURI" name="uri" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="ApplicationNameType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute type="xs:string" name="text" use="required"/>
+        <xs:attribute type="xs:string" name="locale" use="optional"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="ApplicationDescriptionType">
+    <xs:sequence>
+      <xs:element type="ApplicationURIType" name="ApplicationURI" />
+      <xs:element type="ProductURIType" name="ProductURI" />
+      <xs:element type="ApplicationNameType" name="ApplicationName" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="SecurityModeType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute type="SecurityMode" name="mode" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="SecurityModesType">
+    <xs:sequence>
+      <xs:element type="SecurityModeType" name="SecurityMode" maxOccurs="3" minOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="SecurityPolicyType">
+    <xs:sequence>
+      <xs:element type="SecurityModesType" name="SecurityModes"/>
+      <xs:element name="UserPolicies">
+        <xs:complexType mixed="true">
+          <xs:sequence>
+            <xs:element type="UserPolicyType" name="UserPolicy" maxOccurs="5">
+            </xs:element>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+    <xs:attribute type="SecurityURI" name="uri" use="required"/>
+  </xs:complexType>
+  <xs:complexType name="UserPolicyType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute type="xs:string" name="policyId"  use="required"/>
+        <xs:attribute type="TokenType" name="tokenType"  use="required">
+          <xs:annotation>
+            <xs:documentation>Available token types are only anonymous and username. Security URI available is only None</xs:documentation>
+          </xs:annotation>
+        </xs:attribute>
+        <xs:attribute type="SecurityURI" name="securityUri" use="optional"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="UserPoliciesType">
+    <xs:sequence>
+      <xs:element type="UserPolicyType" name="UserPolicy" maxOccurs="5" minOccurs="0">
+        <xs:annotation>
+          <xs:documentation>Available token types are only anonymous and username. Security URI available is only None</xs:documentation>
+        </xs:annotation>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="SecurityPoliciesType">
+    <xs:sequence>
+      <xs:element type="SecurityPolicyType" name="SecurityPolicy" maxOccurs="5" minOccurs="1">
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ReverseConnectionType">
+    <xs:attribute type="xs:anyURI" name="clientUrl" use="required"/>
+    <xs:attribute type="xs:anyURI" name="clientAppUri" use="optional"/>
+  </xs:complexType>
+  <xs:complexType name="ReverseConnectionsType">
+    <xs:sequence>
+      <xs:element type="ReverseConnectionType" name="ReverseConnection" maxOccurs="unbounded" minOccurs="0">
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="EndpointType">
+    <xs:sequence>
+      <xs:element type="ReverseConnectionsType" name="ReverseConnections" minOccurs="0"/>
+      <xs:element type="SecurityPoliciesType" name="SecurityPolicies"/>
+    </xs:sequence>
+    <xs:attribute type="xs:anyURI" name="url" use="required"/>
+    <xs:attribute type="xs:boolean" name="hasDiscoveryEndpoint" use="optional" default="true">
+        <xs:annotation>
+          <xs:documentation>By default each endpoint has an implicit discovery endpoint if security mode None is not available. Set to 'false' to deactivate.</xs:documentation>
+        </xs:annotation>
+    </xs:attribute>
+    <xs:attribute type="xs:boolean" name="enableListening" use="optional" default="true">
+        <xs:annotation>
+          <xs:documentation>This attribute might be set to false to avoid listening for client connections only if at least one ReverseConnection is defined.</xs:documentation>
+        </xs:annotation>
+    </xs:attribute>
+  </xs:complexType>
+  <xs:complexType name="EndpointsType">
+    <xs:sequence>
+      <xs:element type="EndpointType" name="Endpoint" maxOccurs="254">
+        <xs:annotation>
+          <xs:documentation>Note: Endpoint no transport URI (only TCP available) and no security level (computed by server)</xs:documentation>
+        </xs:annotation>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ServerConfigurationType">
+    <xs:sequence>
+      <xs:element type="NamespacesType" name="Namespaces" />
+      <xs:element type="LocalesType" name="Locales" />
+      <xs:element type="ApplicationCertificatesType" name="ApplicationCertificates" minOccurs="0" maxOccurs="1">
+        <xs:annotation>
+          <xs:documentation>Certificates not necessary if only security policy None is used</xs:documentation>
+        </xs:annotation>
+      </xs:element>
+      <xs:element type="ApplicationDescriptionType" name="ApplicationDescription" />
+      <xs:element type="EndpointsType" name="Endpoints" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="S2OPCType">
+    <xs:sequence>
+      <xs:element type="ServerConfigurationType" name="ServerConfiguration" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>

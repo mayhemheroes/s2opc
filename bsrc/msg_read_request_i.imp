@@ -1,0 +1,102 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+IMPLEMENTATION
+    msg_read_request_i
+
+REFINES
+    msg_read_request
+
+IMPORTS
+    msg_read_request_bs
+
+SEES
+    constants,
+    constants_statuscodes_bs,
+    message_in_bs
+
+CONCRETE_VARIABLES
+    nb_ReadValue
+
+INITIALISATION
+    nb_ReadValue := 0
+
+OPERATIONS
+    p_read_ok, p_nb_ReadValue, p_tsToReturn, p_statusCode <-- check_ReadRequest(p_msg) =
+    BEGIN
+        p_nb_ReadValue <-- read_req_nb_ReadValue(p_msg);
+        p_read_ok := bool(0              < p_nb_ReadValue &
+                          p_nb_ReadValue <= k_n_read_resp_max);
+        p_tsToReturn := c_TimestampsToReturn_indet;
+        p_statusCode := c_StatusCode_indet;
+        IF  p_read_ok = TRUE THEN
+            nb_ReadValue := p_nb_ReadValue;
+            p_tsToReturn <-- read_req_TimestampsToReturn(p_msg);
+            IF  p_tsToReturn = c_TimestampsToReturn_indet THEN
+                p_read_ok := FALSE;
+                p_statusCode := e_sc_bad_timestamps_to_return_invalid
+            ELSE
+                /* Note: only check max age parameter invalid values (< 0),  otherwise we do not need to manage max age:
+                   Part4: "If the Server cannot meet the requested maxAge,
+                           it returns its 'best effort' value rather than rejecting the request."
+                */
+                p_read_ok <-- read_req_MaxAge(p_msg);
+                IF  p_read_ok = FALSE THEN
+                    p_statusCode := e_sc_bad_max_age_invalid
+                ELSE
+                    p_statusCode := e_sc_ok
+                END
+            END
+        ELSE
+            IF p_nb_ReadValue <= 0 THEN
+                p_statusCode := e_sc_bad_nothing_to_do
+            ELSIF p_nb_ReadValue > k_n_read_resp_max THEN
+                p_statusCode := e_sc_bad_too_many_ops
+            END;
+            nb_ReadValue := 0
+        END
+    END
+    ;
+
+    p_sc, p_nid, p_aid, p_index_range <-- getall_ReadValue_NodeId_AttributeId(p_msg, p_rvi) =
+    VAR
+        l_data_encoding,
+        l_is_known_data
+    IN
+        p_nid <-- getall_req_ReadValue_NodeId(p_msg, p_rvi);
+        p_sc, p_aid <-- getall_req_ReadValue_AttributeId(p_msg, p_rvi);
+        p_index_range <-- getall_req_ReadValue_IndexRange(p_msg, p_rvi);
+        l_is_known_data, l_data_encoding <-- getall_req_ReadValue_DataEncoding(p_msg, p_rvi);
+        IF p_sc = e_sc_ok & l_data_encoding /= c_QualifiedName_indet
+        THEN
+            IF p_aid /= e_aid_Value or l_is_known_data = FALSE
+            THEN
+                p_sc := e_sc_bad_data_encoding_invalid;
+                p_aid := c_AttributeId_indet
+            END
+        END
+    END
+    ;
+
+    p_nb_ReadValue <-- get_nb_ReadValue =
+    BEGIN
+        p_nb_ReadValue := nb_ReadValue
+    END
+
+END

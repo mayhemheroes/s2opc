@@ -1,0 +1,1018 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+IMPLEMENTATION
+    session_core_i
+REFINES
+    session_core
+
+DEFINITIONS
+    d_active_sessions   == ( sessions_iterated /\ a_channel~[{p_lost_channel}] /\ a_state~[{e_session_userActivated}]);
+    d_inactive_sessions == ((sessions_iterated /\ a_channel~[{p_lost_channel}]) - a_state~[{e_session_userActivated}])
+
+SEES
+    constants,
+    constants_statuscodes_bs,
+    message_in_bs,
+    message_out_bs,
+    channel_mgr,
+    request_handle_bs,
+    time_reference_bs
+
+IMPORTS
+    session_core_1,
+    session_core_it,
+    session_channel_it,
+    msg_session_bs,
+    user_authentication
+
+PROMOTES
+    server_get_session_from_token,
+    client_get_token_from_session,
+    getall_session_channel,
+    get_session_channel,
+    set_session_to_create,
+    set_session_app_context,
+    getall_to_create,
+    getall_orphaned,
+    reset_session_to_create,
+    is_valid_session,
+    drop_user_server,
+    client_gen_create_session_internal_event,
+    client_gen_activate_orphaned_session_internal_event,
+    client_gen_activate_user_session_internal_event,
+    server_session_timeout_start_timer,
+    server_session_timeout_evaluation,
+    server_session_timeout_msg_received,
+    set_session_user_client,
+    get_session_user_client,
+    get_session_user_server,
+    get_server_session_preferred_locales,
+    deallocate_user,
+    get_local_user,
+    has_user_token_policy_available
+
+LOCAL_OPERATIONS
+
+    res_activated <-- server_internal_activate_req_and_resp (channel, session, transitoryState, p_user, activate_req_msg, activate_resp_msg) =
+    PRE
+        channel       : t_channel_i &
+        channel       : s_channel_connected &
+        session       : t_session_i &
+        session       : s_session &
+        transitoryState : t_sessionState & /* used to differentiate transitions externally */
+        p_user          : t_user_i &
+        p_user          : t_user &
+        dom(a_state) = s_session &
+        a_state(session) : {e_session_created, e_session_userActivated, e_session_scOrphaned} &
+        activate_req_msg : t_msg_i &
+        activate_req_msg = c_msg_in &
+        c_msg_in : t_msg &
+        a_msg_in_type = e_msg_session_activate_req &
+        activate_resp_msg : t_msg_i &
+        activate_resp_msg = c_msg_out &
+        c_msg_out : t_msg &
+        a_msg_out_type = e_msg_session_activate_resp
+    THEN
+        CHOICE
+            a_state(session) := e_session_userActivated ||
+            a_channel(session) := channel ||
+            a_user_server(session) := p_user ||
+            res_activated := TRUE ||
+            a_NonceServer
+            :(
+                a_NonceServer : t_session +-> t_Nonce &
+                {session} <<| a_NonceServer = {session} <<| a_NonceServer$0 &
+                session : dom(a_NonceServer)
+            )
+        OR
+            res_activated := FALSE
+        END
+    END
+    ;
+
+    l_client_secure_channel_lost_session_sm(p_dom, p_channel, p_lost_channel, p_session, p_channel_config_idx) =
+    PRE
+        p_dom                : BOOL                   &
+        p_channel            : t_channel_i            &
+        p_session            : t_session_i            &
+        p_lost_channel       : t_channel_i            &
+        p_session            : t_session_i            &
+        p_channel_config_idx : t_channel_config_idx_i &
+        p_channel_config_idx : t_channel_config_idx   &
+        (   p_dom = TRUE
+            =>
+            p_session : dom(a_channel) &
+            p_session : dom(a_state) &
+            p_channel = a_channel(p_session))
+    THEN
+        s_session,
+        a_state,
+        a_channel,
+        a_client_to_create,
+        a_client_app_context,
+        a_client_orphaned,
+        a_user_server,
+        a_user_client,
+        a_server_token,
+        a_client_token,
+        a_NonceServer,
+        a_NonceClient
+        :(
+            s_session                   <: t_session                             &
+            a_state                      : t_session +-> t_sessionState          &
+            a_channel                    : t_session +-> t_channel               &
+            a_client_to_create           : t_session +-> t_channel_config_idx_i  &
+            a_client_app_context         : t_session +-> t_session_application_context_i &
+            a_client_orphaned            : t_session +-> t_channel_config_idx_i  &
+            a_client_token               : t_session +-> t_session_token         &
+            a_server_token               : t_session_token +-> t_session         &
+            a_user_server                : t_session +-> t_user                  &
+            a_user_client                : t_session +-> t_user_token            &
+            a_NonceServer                : t_session +-> t_Nonce                 &
+            a_NonceClient                : t_session +-> t_Nonce                 &
+
+            (   p_dom     = TRUE &
+                p_channel = p_lost_channel
+                =>
+                (   a_state$0(p_session) = e_session_userActivated
+                    =>
+                    a_channel                    = {p_session} <<| a_channel$0 &
+                    a_state                      = a_state$0 <+ {p_session |-> e_session_scOrphaned} &
+                    s_session                    = s_session$0 &
+                    a_client_to_create           = a_client_to_create$0 &
+                    a_client_app_context         = a_client_app_context$0 &
+                    a_user_server                = a_user_server$0 &
+                    a_user_client                = a_user_client$0 &
+                    a_server_token               = a_server_token$0 &
+                    a_client_token               = a_client_token$0 &
+                    a_NonceServer                = a_NonceServer$0 &
+                    a_NonceClient                = a_NonceClient$0 &
+                    a_client_orphaned = a_client_orphaned$0 <+ {p_session |-> p_channel_config_idx}
+                ) &
+                (   a_state$0(p_session) /= e_session_userActivated
+                    =>
+                    s_session                    = s_session$0 - {p_session} &
+                    a_state                      = {p_session} <<| a_state$0 &
+                    a_channel                    = {p_session} <<| a_channel$0 &
+                    a_client_to_create           = {p_session} <<| a_client_to_create$0 &
+                    a_client_app_context         = {p_session} <<| a_client_app_context$0 &
+                    a_client_orphaned            = {p_session} <<| a_client_orphaned$0 &
+                    a_user_server                = {p_session} <<| a_user_server$0 &
+                    a_user_client                = {p_session} <<| a_user_client$0 &
+                    a_server_token               = a_server_token$0 |>> {p_session} &
+                    a_client_token               = {p_session} <<| a_client_token$0 &
+                    a_NonceServer                = {p_session} <<| a_NonceServer$0 &
+                    a_NonceClient                = {p_session} <<| a_NonceClient$0
+                )
+            ) &
+            (   not(p_dom     = TRUE &
+                    p_channel = p_lost_channel)
+                =>
+                s_session                    = s_session$0 &
+                a_state                      = a_state$0 &
+                a_channel                    = a_channel$0 &
+                a_client_to_create           = a_client_to_create$0 &
+                a_client_app_context         = a_client_app_context$0 &
+                a_client_orphaned            = a_client_orphaned$0 &
+                a_user_server                = a_user_server$0 &
+                a_user_client                = a_user_client$0 &
+                a_server_token               = a_server_token$0 &
+                a_client_token               = a_client_token$0 &
+                a_NonceServer                = a_NonceServer$0 &
+                a_NonceClient                = a_NonceClient$0
+            )
+        )
+    END
+    ;
+
+    l_server_secure_channel_lost_session_sm(p_dom, p_channel, p_lost_channel, p_session) =
+    PRE
+        p_dom          : BOOL        &
+        p_channel      : t_channel_i &
+        p_session      : t_session_i &
+        p_lost_channel : t_channel_i &
+        p_session      : t_session_i &
+        (   p_dom = TRUE
+            =>
+            p_session : dom(a_channel) &
+            p_session : dom(a_state) &
+            p_channel = a_channel(p_session))
+    THEN
+        s_session,
+        a_state,
+        a_channel,
+        a_client_to_create,
+        a_client_app_context,
+        a_client_orphaned,
+        a_user_server,
+        a_user_client,
+        a_server_token,
+        a_client_token,
+        a_NonceServer,
+        a_NonceClient
+        :(
+            s_session                   <: t_session                             &
+            a_state                      : t_session +-> t_sessionState          &
+            a_channel                    : t_session +-> t_channel               &
+            a_client_to_create           : t_session +-> t_channel_config_idx_i  &
+            a_client_app_context         : t_session +-> t_session_application_context_i &
+            a_client_orphaned            : t_session +-> t_channel_config_idx_i  &
+            a_client_token               : t_session +-> t_session_token         &
+            a_server_token               : t_session_token +-> t_session         &
+            a_user_server                : t_session +-> t_user                  &
+            a_user_client                : t_session +-> t_user_token            &
+            a_NonceServer                : t_session +-> t_Nonce                 &
+            a_NonceClient                : t_session +-> t_Nonce                 &
+
+            (   p_dom     = TRUE &
+                p_channel = p_lost_channel
+                =>
+                (   a_state$0(p_session) = e_session_userActivated
+                    =>
+                    a_channel                    = {p_session} <<| a_channel$0 &
+                    a_state                      = a_state$0 <+ {p_session |-> e_session_scOrphaned} &
+                    s_session                    = s_session$0 &
+                    a_client_to_create           = a_client_to_create$0 &
+                    a_client_app_context         = a_client_app_context$0 &
+                    a_user_server                = a_user_server$0 &
+                    a_user_client                = a_user_client$0 &
+                    a_server_token               = a_server_token$0 &
+                    a_client_token               = a_client_token$0 &
+                    a_NonceServer                = a_NonceServer$0 &
+                    a_NonceClient                = a_NonceClient$0 &
+                    a_client_orphaned            = a_client_orphaned$0
+                ) &
+                (   a_state$0(p_session) /= e_session_userActivated
+                    =>
+                    s_session                    = s_session$0 - {p_session} &
+                    a_state                      = {p_session} <<| a_state$0 &
+                    a_channel                    = {p_session} <<| a_channel$0 &
+                    a_client_to_create           = {p_session} <<| a_client_to_create$0 &
+                    a_client_app_context         = {p_session} <<| a_client_app_context$0 &
+                    a_client_orphaned            = {p_session} <<| a_client_orphaned$0 &
+                    a_user_server                = {p_session} <<| a_user_server$0 &
+                    a_user_client                = {p_session} <<| a_user_client$0 &
+                    a_server_token               = a_server_token$0 |>> {p_session} &
+                    a_client_token               = {p_session} <<| a_client_token$0 &
+                    a_NonceServer                = {p_session} <<| a_NonceServer$0 &
+                    a_NonceClient                = {p_session} <<| a_NonceClient$0
+                )
+            ) &
+            (   not(p_dom     = TRUE &
+                    p_channel = p_lost_channel)
+                =>
+                s_session                    = s_session$0 &
+                a_state                      = a_state$0 &
+                a_channel                    = a_channel$0 &
+                a_client_to_create           = a_client_to_create$0 &
+                a_client_app_context         = a_client_app_context$0 &
+                a_client_orphaned            = a_client_orphaned$0 &
+                a_user_server                = a_user_server$0 &
+                a_user_client                = a_user_client$0 &
+                a_server_token               = a_server_token$0 &
+                a_client_token               = a_client_token$0 &
+                a_NonceServer                = a_NonceServer$0 &
+                a_NonceClient                = a_NonceClient$0
+            )
+        )
+    END
+
+OPERATIONS
+
+    res_activated <-- server_internal_activate_req_and_resp (channel, session, transitoryState, p_user, activate_req_msg, activate_resp_msg) =
+    VAR
+        l_channel_config_idx,
+        l_secpol,
+        l_nonce,
+        l_localeIds
+    IN
+        l_channel_config_idx <-- get_channel_info (channel);
+        l_secpol <-- get_SecurityPolicy(channel);
+        IF l_secpol /= e_secpol_None THEN
+            res_activated <-- server_activate_session_check_crypto(session, channel, l_channel_config_idx, activate_req_msg)
+        ELSE
+            res_activated := TRUE
+        END
+        ;
+        IF res_activated = TRUE THEN
+            res_activated, l_nonce <-- server_set_fresh_nonce(session, l_channel_config_idx);
+            IF res_activated = TRUE THEN
+                write_activate_session_resp_nonce(activate_resp_msg, l_nonce)
+            END
+        END
+        ;
+        /* Note: results[] and diagnosticInfos[] info fields should not be filled
+           since it concerns SoftwareCertificate from request which is reserved for a future use */
+        IF res_activated = TRUE THEN
+            set_session_state (session, transitoryState, FALSE);
+            drop_user_server (session); // In case a previous user was set, drop it
+            set_session_user_server (session, p_user);
+            set_session_channel (session, channel);
+            l_localeIds <-- read_activate_req_msg_locales (activate_req_msg);
+            set_server_session_preferred_locales_or_indet (session, l_localeIds);
+            set_session_state (session, e_session_userActivated, FALSE)
+        END
+    END
+    ;
+
+    /* END OF LOCAL OPERATIONS */
+    nsession <-- client_init_session_sm =
+    BEGIN
+        nsession <-- init_new_session (TRUE)
+    END;
+
+    valid <-- client_create_session_req_sm (session, channel, create_req_msg) =
+    VAR
+        l_channel_config_idx,
+        l_nonce_needed,
+        l_nonce,
+        l_app_context
+    IN
+        create_session (session, channel, e_session_creating, TRUE);
+        l_channel_config_idx <-- get_channel_info (channel);
+        valid, l_nonce_needed <-- client_create_session_req_do_crypto(session, channel, l_channel_config_idx);
+        IF valid = TRUE THEN
+            write_create_session_req_msg_clientDescription (create_req_msg, l_channel_config_idx);
+            write_create_session_req_msg_serverUri (create_req_msg, l_channel_config_idx);
+            write_create_session_req_msg_endpointUrl (create_req_msg, l_channel_config_idx);
+            l_app_context <-- get_session_app_context(session);
+            write_create_session_req_msg_sessionName (create_req_msg, l_app_context);
+            IF l_nonce_needed = TRUE THEN
+                l_nonce <-- get_NonceClient(session);
+
+                valid <-- write_create_session_req_msg_crypto(create_req_msg, l_channel_config_idx, l_nonce)
+            END;
+            write_create_session_req_msg_sessionTimeout (create_req_msg);
+            write_create_session_req_msg_maxResponseMessageSize (create_req_msg)
+        END
+    END
+    ;
+
+    nsession, service_ret <-- server_create_session_req_and_resp_sm (channel, create_req_msg, create_resp_msg) =
+    VAR
+        l_nsession,
+        l_valid_session,
+        l_channel_config_idx,
+        l_nsession_token,
+        l_valid_session_token,
+        l_endpoint_config_idx,
+        l_valid_server_cert,
+        l_crypto_status,
+        l_signature,
+        l_nonce,
+        l_secpol,
+        l_set_cert,
+        l_bret
+    IN
+        l_set_cert := FALSE;
+        l_bret := FALSE;
+        service_ret := e_sc_bad_out_of_memory;
+        l_nsession <-- init_new_session (FALSE);
+        l_valid_session <-- is_valid_session (l_nsession);
+        IF l_valid_session = TRUE THEN
+            create_session(l_nsession, channel, e_session_created, FALSE);
+            l_channel_config_idx <-- get_channel_info (channel);
+            l_valid_server_cert <-- create_session_req_check_client_certificate (create_req_msg, l_channel_config_idx);
+            l_nsession_token <-- server_get_fresh_session_token (l_channel_config_idx, l_nsession);
+            l_valid_session_token <-- server_is_valid_session_token (l_nsession_token);
+            IF  l_valid_session_token = TRUE & l_valid_server_cert = TRUE
+            THEN
+                l_endpoint_config_idx <-- server_get_endpoint_config (channel);
+                write_create_session_msg_session_token (create_resp_msg, l_nsession, l_nsession_token);
+                /* Set revised timeout to : MIN <= requested timeout <= MAX */
+                write_create_session_msg_session_revised_timeout (create_req_msg, create_resp_msg);
+                write_create_session_resp_msg_maxRequestMessageSize (create_resp_msg);
+
+                service_ret <-- write_create_session_msg_server_endpoints (create_req_msg, create_resp_msg, l_endpoint_config_idx);
+                IF service_ret = e_sc_ok THEN
+                    l_secpol <-- get_SecurityPolicy(channel);
+                    IF l_secpol /= e_secpol_None THEN
+                        /* If the security policy is not none, the nonce and server certificate are needed */
+                        l_set_cert := TRUE;
+                        /* Do the cryptographic challenge which may fail because of mallocs */
+                        l_crypto_status, l_signature <-- server_create_session_req_do_crypto(l_nsession, create_req_msg, l_endpoint_config_idx, l_channel_config_idx);
+                        IF  l_crypto_status = e_sc_ok THEN
+                            /* Write server signature */
+                            l_bret <-- write_create_session_resp_signature(create_resp_msg, l_signature);
+                            clear_Signature(l_nsession, FALSE, l_signature);
+                            IF l_bret = FALSE THEN
+                                service_ret := e_sc_bad_unexpected_error
+                            END
+                        ELSE
+                            service_ret := l_crypto_status
+                        END
+                    END
+                    ;
+                    IF service_ret = e_sc_ok THEN
+                        IF l_set_cert = FALSE THEN
+                            /* In case the security policy is None we might still need the nonce for password encryption */
+                            l_endpoint_config_idx <-- server_get_endpoint_config (channel);
+                            l_set_cert <-- server_may_need_user_token_encryption(l_endpoint_config_idx, l_channel_config_idx)
+                        END
+                        ;
+                        IF l_set_cert = TRUE THEN
+                            /* Write server certificate */
+                            l_bret <-- write_create_session_resp_cert(create_resp_msg, l_channel_config_idx)
+                        ELSE
+                            l_bret := TRUE
+                        END
+                        ;
+                        IF l_bret = TRUE THEN
+                            l_bret, l_nonce <-- server_set_fresh_nonce(l_nsession, l_channel_config_idx);
+                            IF l_bret = TRUE THEN
+                                /* Write server nonce */
+                                write_create_session_resp_nonce(create_resp_msg, l_nonce)
+                            END
+                        END
+                        ;
+                        IF l_bret = FALSE THEN
+                            service_ret := e_sc_bad_unexpected_error
+                        END
+                    END
+                END
+                ;
+                IF service_ret = e_sc_ok THEN
+                    /* Minimize the encoding OPC UA message body maximum size with the maxResponseMessageSize requested by client.
+                       Initial value is defined with SC sendMaxMessageSize.*/
+                    create_session_req_export_maxResponseMessageSize (l_channel_config_idx, create_req_msg)
+                END
+            ELSE
+                IF l_valid_server_cert = TRUE
+                THEN
+                    service_ret := e_sc_bad_too_many_sessions
+                ELSE
+                    service_ret := e_sc_bad_security_checks_failed
+                END;
+                set_session_state_closed (l_nsession, e_sc_bad_session_id_invalid, FALSE);
+                l_nsession := c_session_indet
+            END
+        ELSE
+            service_ret := e_sc_bad_too_many_sessions
+        END;
+        nsession := l_nsession
+    END
+    ;
+
+    bret <-- client_create_session_resp_sm (channel, session, session_token, create_resp_msg) =
+    VAR
+        l_valid_user_secu_properties,
+        l_endpoints_bres,
+        l_valid_server_cert,
+        l_channel_config_idx,
+        l_secpol
+    IN
+        /* TODO: check Request:handle == Response:handle */
+        /* TODO? check Response:serverEndpoints */
+        /* Check server signature */
+        l_secpol <-- get_SecurityPolicy(channel);
+        l_channel_config_idx <-- get_channel_info (channel);
+        /* Note: only check the certificate is the same than SC,
+           if certificate validation needed (SC secu = None and User secu != None) it is done during ActivateSession */
+        l_valid_server_cert <-- create_session_resp_check_server_certificate (create_resp_msg, l_channel_config_idx);
+        l_endpoints_bres <-- create_session_resp_check_server_endpoints (create_resp_msg, l_channel_config_idx);
+        l_valid_user_secu_properties <-- client_create_session_set_user_token_secu_properties(session, l_channel_config_idx, create_resp_msg);
+        bret := bool(l_valid_server_cert = TRUE & l_endpoints_bres = TRUE & l_valid_user_secu_properties = TRUE);
+        IF bret = TRUE THEN
+            IF l_secpol /= e_secpol_None THEN
+                /* Note: receiving a request implies that we sent it, and Nonce, if needed, was valid, hence get_NonceClient cannot fail. */
+                /* TODO: at least validate nonce value. In this case it could also be better to have it as parameter of check_crypto ! */
+                bret <-- client_create_session_check_crypto(session, l_channel_config_idx, create_resp_msg);
+                IF bret = TRUE THEN
+                    drop_NonceClient(session)
+                END
+            ELSE
+                /* We still might need the server nonce in case the user token security policy != None */
+                client_set_NonceServer(session, create_resp_msg)
+            END
+        END;
+        IF bret = TRUE THEN
+            set_session_state (session, e_session_created, TRUE);
+            client_set_session_token (session, session_token);
+            /* Minimize the encoding OPC UA message body maximum size with the maxRequestMessageSize requested by server.
+               Initial value is defined with SC sendMaxMessageSize.*/
+            create_session_resp_export_maxRequestMessageSize(l_channel_config_idx, create_resp_msg)
+        END
+    END
+    ;
+
+    ret, channel, session_token <-- client_user_activate_session_req_sm (session, p_user_token, activate_req_msg) =
+    VAR
+        l_is_connected_channel,
+        l_channel_config_idx,
+        l_secpol,
+        l_valid_crypto,
+        l_signature,
+        l_server_nonce,
+        l_user_secu_policy,
+        l_user_server_cert,
+        l_encrypted_user_token,
+        l_valid_cert,
+        l_valid_encrypt,
+        l_bret
+    IN
+        channel <-- get_session_channel (session);
+        l_is_connected_channel <-- is_connected_channel(channel);
+        IF l_is_connected_channel = TRUE THEN
+            session_token <-- client_get_token_from_session (session);
+            l_channel_config_idx <-- get_channel_info (channel);
+            l_server_nonce <-- get_NonceServer(session, TRUE);
+            l_user_secu_policy <-- get_session_user_secu_client(session);
+            l_user_server_cert <-- get_session_user_server_certificate(session);
+            IF l_user_secu_policy = e_secpol_None THEN
+                // No user encryption
+                l_valid_cert := TRUE
+            ELSE
+                // Note: server certificate is validated in case no certificate used by SC and user token needs it for encryption
+                l_valid_cert <-- may_validate_server_certificate(session, l_channel_config_idx, l_user_server_cert, l_user_secu_policy)
+            END
+            ;
+            IF l_valid_cert = TRUE THEN
+                l_valid_encrypt, l_encrypted_user_token <-- may_encrypt_user_token(l_channel_config_idx, l_user_server_cert, l_server_nonce, l_user_secu_policy, p_user_token)
+            ELSE
+                l_encrypted_user_token := c_user_token_indet;
+                l_valid_encrypt := FALSE
+            END
+            ;
+            /* TODO: populate msg with parameters */
+            IF l_valid_cert = TRUE & l_valid_encrypt = TRUE THEN
+                write_activate_msg_user(activate_req_msg, l_encrypted_user_token);
+                l_secpol <-- get_SecurityPolicy(channel);
+                IF l_secpol /= e_secpol_None THEN
+                    // TODO: validate server nonce ? Or guaranteed by session state ?
+                    l_valid_crypto, l_signature <-- client_activate_session_req_do_crypto(session, l_channel_config_idx, l_server_nonce);
+                    IF l_valid_crypto = TRUE THEN
+                        l_bret <-- write_activate_session_req_msg_crypto(activate_req_msg, l_signature);
+                        clear_Signature(session, TRUE, l_signature);
+                        IF l_bret = TRUE THEN
+                            write_activate_req_msg_locales(activate_req_msg, l_channel_config_idx);
+                            ret := e_sc_ok
+                        ELSE
+                            ret := e_sc_bad_unexpected_error
+                        END
+                    ELSE
+                        ret := e_sc_bad_security_checks_failed
+                    END
+                ELSE
+                    ret := e_sc_ok
+                END
+            ELSE
+                ret := e_sc_bad_security_checks_failed
+            END
+        ELSE
+            channel := c_channel_indet;
+            session_token := c_session_token_indet;
+            ret := e_sc_bad_unexpected_error
+        END;
+        IF ret = e_sc_ok THEN
+            set_session_state(session, e_session_userActivating, TRUE)
+        END
+    END
+    ;
+
+    session_token <-- client_sc_activate_session_req_sm (session, channel, activate_req_msg) =
+    VAR
+        l_user_token,
+        l_channel_config_idx
+    IN
+        session_token <-- client_get_token_from_session (session);
+        l_user_token <-- get_session_user_client (session);
+        l_channel_config_idx <-- get_channel_info (channel);
+        write_activate_req_msg_locales(activate_req_msg, l_channel_config_idx);
+        write_activate_msg_user(activate_req_msg, l_user_token);
+        set_session_channel(session, channel);
+        set_session_state(session, e_session_scActivating, TRUE)
+    END
+    ;
+
+    p_sc_valid_user, p_user <-- allocate_authenticated_user (p_channel, p_session, p_user_token) =
+    VAR
+        l_channel_config_idx,
+        l_endpoint_config_idx,
+        l_server_nonce
+    IN
+        l_channel_config_idx <-- get_channel_info (p_channel);
+        l_endpoint_config_idx <-- server_get_endpoint_config (p_channel);
+        l_server_nonce <-- get_NonceServer(p_session, FALSE);
+        p_sc_valid_user, p_user <-- allocate_valid_and_authenticated_user (p_user_token, l_server_nonce, l_channel_config_idx, l_endpoint_config_idx)
+    END
+    ;
+
+    ret <-- server_activate_session_req_and_resp_sm (channel, session, user, activate_req_msg, activate_resp_msg) =
+    VAR
+        l_channel,
+        l_state,
+        l_user,
+        l_is_same_user,
+        l_valid,
+        l_ret
+    IN
+        l_channel <-- get_session_channel (session);
+        l_state <-- get_session_state (session);
+        IF l_state = e_session_created
+        THEN
+            /* Channel must be the same and user must be set */
+            IF l_channel = channel
+            THEN
+                l_valid <-- server_internal_activate_req_and_resp (channel,
+                                                                   session,
+                                                                   e_session_creating,
+                                                                   user,
+                                                                   activate_req_msg,
+                                                                   activate_resp_msg);
+                IF l_valid = TRUE THEN
+                    l_ret := e_sc_ok
+                ELSE
+                    /* Note: it also might be an unexpected internal error */
+                    l_ret := e_sc_bad_application_signature_invalid
+                END
+            ELSE
+                l_ret := e_sc_bad_invalid_argument
+            END
+        ELSIF l_state = e_session_userActivated
+        THEN
+            l_user <-- get_session_user_server (session);
+            /* User changed XOR channel changed */
+            IF l_channel = channel
+            THEN
+                l_valid <-- server_internal_activate_req_and_resp (channel,
+                                                                   session,
+                                                                   e_session_userActivating,
+                                                                   user,
+                                                                   activate_req_msg,
+                                                                   activate_resp_msg);
+                IF l_valid = TRUE THEN
+                    l_ret := e_sc_ok
+                ELSE
+                    /* Note: it also might be an unexpected internal error */
+                    l_ret := e_sc_bad_application_signature_invalid
+                END
+            ELSIF l_channel /= channel
+            THEN
+                l_is_same_user <-- is_same_user_server (l_user, user);
+                /* User shall remain the same if channel is different */
+                IF l_is_same_user = TRUE
+                THEN
+                    l_valid <-- server_internal_activate_req_and_resp (channel,
+                        session,
+                        e_session_scActivating,
+                        user,
+                        activate_req_msg,
+                        activate_resp_msg);
+                    IF l_valid = TRUE THEN
+                        l_ret := e_sc_ok
+                    ELSE
+                        /* Note: it also might be an unexpected internal error */
+                        l_ret := e_sc_bad_application_signature_invalid
+                    END
+                ELSE
+                    l_ret := e_sc_bad_invalid_state
+                END
+            ELSE
+                l_ret := e_sc_bad_invalid_state
+            END
+        ELSIF l_state = e_session_scOrphaned
+        THEN
+            l_user <-- get_session_user_server (session);
+            l_is_same_user <-- is_same_user_server (l_user, user);
+            /* Channel changed */
+            IF l_channel /= channel &
+                l_is_same_user = TRUE
+            THEN
+                l_valid <-- server_internal_activate_req_and_resp (channel,
+                                                                   session,
+                                                                   e_session_scActivating,
+                                                                   user,
+                                                                   activate_req_msg,
+                                                                   activate_resp_msg);
+                IF l_valid = TRUE THEN
+                    l_ret := e_sc_ok
+                ELSE
+                    /* Note: it also might be an unexpected internal error */
+                    l_ret := e_sc_bad_application_signature_invalid
+                END
+            ELSE
+                l_ret := e_sc_bad_invalid_state
+            END
+        ELSE
+            l_ret := e_sc_bad_invalid_state
+        END;
+        ret := l_ret
+    END
+    ;
+
+    bret <-- client_activate_session_resp_sm (channel , session, activate_resp_msg) =
+    VAR
+        l_channel_config_idx,
+        l_valid_response
+    IN
+        /* PRE checked channel was session channel*/
+        l_channel_config_idx <-- get_channel_info (channel);
+        /* TODO: check response parameters + nonce param if applicable */
+        l_valid_response <-- client_activate_session_resp_check(session, l_channel_config_idx,  activate_resp_msg);
+        IF l_valid_response = TRUE
+        THEN
+            set_session_state (session, e_session_userActivated, TRUE);
+            bret := TRUE
+        ELSE
+            bret := FALSE
+        END
+    END
+    ;
+
+    l_client_secure_channel_lost_session_sm(p_dom, p_channel, p_lost_channel, p_session, p_channel_config_idx) =
+    VAR
+        l_state
+    IN
+        IF  p_dom = TRUE &
+            p_channel = p_lost_channel
+        THEN
+            l_state <-- get_session_state (p_session);
+            IF  l_state = e_session_userActivated
+            THEN
+                /* Active sessions set to orphaned and channel config idx associated */
+                set_session_orphaned (p_session, p_channel_config_idx);
+                set_session_state (p_session, e_session_scOrphaned, TRUE)
+            ELSE
+                /* Inactive sessions or all orphaned sessions (if no new channel can be associated) */
+                set_session_state_closed (p_session, e_sc_bad_secure_channel_closed , TRUE)
+            END
+        END
+    END
+    ;
+
+    client_secure_channel_lost_session_sm (p_lost_channel, p_channel_config_idx) =
+    VAR
+        l_continue,
+        l_session,
+        l_dom,
+        l_channel
+    IN
+        l_continue <-- init_iter_session;
+        IF  l_continue = TRUE THEN  /* Only for proving */
+            WHILE l_continue = TRUE DO
+                l_continue, l_session <-- continue_iter_session;
+                l_dom, l_channel <-- getall_session_channel(l_session);
+                l_client_secure_channel_lost_session_sm(l_dom, l_channel, p_lost_channel, l_session, p_channel_config_idx)
+            INVARIANT
+                sessions_to_iterate <: t_session &
+                sessions_iterated   <: t_session &
+                sessions_to_iterate /\ sessions_iterated = {} &
+                sessions_to_iterate \/ sessions_iterated = t_session &
+                l_continue = bool(sessions_to_iterate /= {}) &
+                dom(a_channel) <: dom(a_state) &
+                s_session                    = s_session$0 - d_inactive_sessions                                                         &
+                a_state                      = d_inactive_sessions <<| a_state$0 <+ d_active_sessions * {e_session_scOrphaned}           &
+                a_channel                    = d_inactive_sessions <<| a_channel$0 |>> {p_lost_channel}                                  &
+                a_client_to_create           = d_inactive_sessions <<| a_client_to_create$0                                              &
+                a_client_app_context         = d_inactive_sessions <<| a_client_app_context$0                                            &
+                a_client_orphaned            = d_inactive_sessions <<| a_client_orphaned$0 <+ d_active_sessions * {p_channel_config_idx} &
+                a_user_server                = d_inactive_sessions <<| a_user_server$0                                                   &
+                a_user_client                = d_inactive_sessions <<| a_user_client$0                                                   &
+                a_server_token               = a_server_token$0 |>> d_inactive_sessions                                                  &
+                a_client_token               = d_inactive_sessions <<| a_client_token$0                                                  &
+                a_NonceServer                = d_inactive_sessions <<| a_NonceServer$0                                                   &
+                a_NonceClient                = d_inactive_sessions <<| a_NonceClient$0
+            VARIANT
+                card(sessions_to_iterate)
+            END
+        END
+    END
+    ;
+
+
+    l_server_secure_channel_lost_session_sm(p_dom, p_channel, p_lost_channel, p_session) =
+    VAR
+        l_state
+    IN
+        IF  p_dom = TRUE &
+            p_channel = p_lost_channel
+        THEN
+            l_state <-- get_session_state (p_session);
+            IF l_state = e_session_userActivated
+            THEN
+                set_session_orphaned (p_session, c_channel_config_idx_indet);
+                set_session_state (p_session, e_session_scOrphaned, FALSE)
+            ELSE
+                set_session_state_closed (p_session, e_sc_bad_secure_channel_closed , FALSE)
+            END
+        END
+    END
+    ;
+
+    server_secure_channel_lost_session_sm (p_lost_channel) =
+    VAR
+        l_continue,
+        l_session,
+        l_dom,
+        l_channel
+    IN
+        l_continue <-- init_iter_session;
+        IF  l_continue = TRUE THEN  /* Only for proving */
+            WHILE l_continue = TRUE DO
+                l_continue, l_session <-- continue_iter_session;
+                l_dom, l_channel <-- getall_session_channel(l_session);
+                l_server_secure_channel_lost_session_sm(l_dom, l_channel, p_lost_channel, l_session)
+            INVARIANT
+                sessions_to_iterate <: t_session &
+                sessions_iterated   <: t_session &
+                sessions_to_iterate /\ sessions_iterated = {} &
+                sessions_to_iterate \/ sessions_iterated = t_session&
+                l_continue = bool(sessions_to_iterate /= {}) &
+                dom(a_channel) <: dom(a_state) &
+                s_session                    = s_session$0 - d_inactive_sessions                                               &
+                a_state                      = d_inactive_sessions <<| a_state$0 <+ d_active_sessions * {e_session_scOrphaned} &
+                a_channel                    = d_inactive_sessions <<| a_channel$0 |>> {p_lost_channel}                        &
+                a_client_to_create           = d_inactive_sessions <<| a_client_to_create$0                                    &
+                a_client_app_context         = d_inactive_sessions <<| a_client_app_context$0                                  &
+                a_client_orphaned            = d_inactive_sessions <<| a_client_orphaned$0                                     &
+                a_user_server                = d_inactive_sessions <<| a_user_server$0                                         &
+                a_user_client                = d_inactive_sessions <<| a_user_client$0                                         &
+                a_server_token               = a_server_token$0 |>> d_inactive_sessions                                        &
+                a_client_token               = d_inactive_sessions <<| a_client_token$0                                        &
+                a_NonceServer                = d_inactive_sessions <<| a_NonceServer$0                                         &
+                a_NonceClient                = d_inactive_sessions <<| a_NonceClient$0
+            VARIANT
+                card(sessions_to_iterate)
+            END
+        END
+    END
+    ;
+
+    ret, channel, session_token <-- client_close_session_req_sm (session, close_req_msg) =
+    VAR
+        l_is_connected_channel
+    IN
+        /* PRE check request msg type expected */
+        /* TODO: fulfill delete subscriptions flag (to be provided as param ?) */
+        client_close_session_req_msg(close_req_msg); /* Avoid unused variable*/
+
+        channel <-- get_session_channel (session);
+        l_is_connected_channel <-- is_connected_channel(channel);
+        IF l_is_connected_channel = TRUE
+        THEN
+            session_token <-- client_get_token_from_session (session);
+            /* TODO: populate msg with parameters */
+            set_session_state (session, e_session_closing, TRUE);
+            ret := e_sc_ok
+        ELSE
+            channel := c_channel_indet;
+            session_token := c_session_token_indet;
+            ret := e_sc_bad_unexpected_error
+        END
+
+    END
+    ;
+
+    ret <-- server_close_session_req_and_resp_sm (channel, session, close_req_msg, close_resp_msg) =
+    BEGIN
+        /* PRE guarantee channel is connected */
+        channel_do_nothing (channel); /* Avoid unused variable */
+        /* TODO: actions on pending requests or current subscriptions to manage (see request) */
+        server_close_session_check_req (close_req_msg, close_resp_msg);
+        /* No need to store the handle since we will send response in same step */
+        set_session_state_closed (session, e_sc_ok , FALSE);
+        ret := e_sc_ok
+    END
+    ;
+
+    client_close_session_resp_sm (channel, session, close_resp_msg) =
+    BEGIN
+        /* PRE guarantee channel is connected */
+        channel_do_nothing (channel); /* Avoid unused variable */
+        client_close_session_resp_msg(close_resp_msg); /* Avoid unused variable*/
+        /* In any case we close the session: correct channel or not  */
+        set_session_state_closed (session, e_sc_ok, TRUE)
+    END
+    ;
+
+    client_close_session_sm (session, sc_reason) =
+    BEGIN
+        set_session_state_closed (session, sc_reason, TRUE)
+    END
+    ;
+
+    server_close_session_sm (session, sc_reason) =
+    BEGIN
+        set_session_state_closed (session, sc_reason, FALSE)
+    END
+    ;
+
+    ret <-- is_session_valid_for_service (channel, session) =
+    BEGIN
+        // only for PRE compliance
+        channel_do_nothing (channel); /* Avoid unused variable */
+        session_do_nothing (session); /* Avoid unused variable */
+        ret := TRUE
+    END
+    ;
+
+    state <-- get_session_state_or_closed (session) =
+    VAR
+        l_valid_session
+    IN
+        l_valid_session <-- is_valid_session (session);
+        IF l_valid_session = TRUE
+        THEN
+            state <-- get_session_state (session)
+        ELSE
+            state := e_session_closed
+        END
+    END
+    ;
+
+    p_has_channel_to_close, p_channel_to_close <-- find_channel_to_close =
+    VAR
+        l_continue,
+        l_channel,
+        l_connected,
+        l_session,
+        l_timeref,
+        l_is_older_than,
+        l_oldest_channel,
+        l_oldest_channel_timeref
+    IN
+        l_oldest_channel := c_channel_indet;
+        l_oldest_channel_timeref := c_timeref_indet;
+        l_continue <-- init_iter_channel;
+        WHILE
+            l_continue = TRUE
+        DO
+            l_continue, l_channel <-- continue_iter_channel;
+            l_connected <-- is_connected_channel(l_channel);
+            l_session <-- get_channel_session(l_channel);
+            IF l_connected = TRUE & l_session = c_session_indet
+            THEN
+                l_timeref <-- get_connection_time(l_channel);
+                IF l_oldest_channel_timeref = c_timeref_indet
+                THEN
+                    /* first secure channel we are allowed to close found */
+                    l_oldest_channel_timeref := l_timeref;
+                    l_oldest_channel := l_channel
+                ELSE
+                    l_is_older_than <-- is_less_than_TimeReference(l_timeref, l_oldest_channel_timeref);
+                    IF l_is_older_than = TRUE
+                    THEN
+                        /* older secure channel to close found */
+                        l_oldest_channel_timeref := l_timeref;
+                        l_oldest_channel := l_channel
+                    END
+                END
+            END // ELSE: we cannot close a channel with a session
+        INVARIANT
+            channels_to_iterate <: t_channel &
+            channels_iterated   <: t_channel &
+            channels_to_iterate /\ channels_iterated = {} &
+            channels_to_iterate \/ channels_iterated = t_channel &
+            !(p_channel).(p_channel : channels_iterated /\ s_channel_connected - ran(a_channel) =>
+                /* Oldest timeref is less than any other timeref */
+                (l_oldest_channel_timeref /= a_channel_connected_time(p_channel) =>
+                    l_oldest_channel_timeref |-> a_channel_connected_time(p_channel) : TimeReference_IsLessThan) &
+                l_oldest_channel : a_channel_connected_time~[{l_oldest_channel_timeref}]
+            )
+            &
+            (channels_iterated /\ s_channel_connected - ran(a_channel) = {} =>
+                l_oldest_channel_timeref = c_timeref_indet &
+                l_oldest_channel = c_channel_indet
+            )
+        VARIANT
+            card(channels_to_iterate)
+        END;
+        IF l_oldest_channel_timeref = c_timeref_indet
+        THEN
+            p_has_channel_to_close := FALSE;
+            p_channel_to_close := c_channel_indet
+        ELSE
+            p_has_channel_to_close := TRUE;
+            p_channel_to_close := l_oldest_channel
+        END
+    END
+    ;
+
+    bres, channel <-- getall_valid_session_channel (session) =
+    BEGIN
+        bres <-- is_valid_session (session);
+        IF bres = TRUE
+        THEN
+            channel <-- get_session_channel (session)
+        ELSE
+            bres, channel <-- getall_session_channel (session)
+        END
+    END
+END

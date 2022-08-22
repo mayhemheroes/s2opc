@@ -1,0 +1,1573 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+IMPLEMENTATION
+    service_mgr_i
+REFINES
+    service_mgr
+
+SEES
+    channel_mgr,
+    constants,
+    constants_statuscodes_bs
+
+IMPORTS
+    message_in_bs,
+    message_out_bs,
+    service_mgr_bs,
+    session_mgr,
+    service_read,
+    request_handle_bs,
+    service_response_cb_bs,
+    address_space_itf,
+    service_get_endpoints_bs,
+    service_set_view,
+    subscription_mgr,
+    service_set_discovery_server,
+    service_register_nodes,
+    service_unregister_nodes,
+    call_method_mgr
+
+PROMOTES
+    /* message_in_bs */
+    decode_msg_type,
+    is_valid_msg_in_type,
+    is_valid_request_context,
+    is_valid_app_msg_in,
+
+    /* message_out_bs */
+    is_valid_app_msg_out,
+    is_valid_buffer_out,
+    bless_msg_out,
+    dealloc_msg_out,
+
+    /* request_handle_bs */
+    client_req_handle_to_request_id,
+    client_request_id_to_req_handle,
+
+    /* session_mgr */
+    is_valid_session,
+    client_secure_channel_lost_session_sm,
+    server_secure_channel_lost_session_sm,
+    client_async_activate_new_session_without_channel,
+    client_async_activate_new_session_with_channel,
+    client_channel_connected_event_session,
+    client_async_discovery_request_without_channel,
+    client_discovery_req_failures_on_final_connection_failure,
+    client_channel_connected_event_discovery,
+    client_close_sessions_on_final_connection_failure,
+    client_close_session,
+    server_evaluate_session_timeout,
+    get_session_user_server,
+    get_local_user,
+    find_channel_to_close,
+
+    /* subscription_mgr */
+    is_valid_subscription,
+    server_subscription_data_changed,
+    server_subscription_publish_timeout
+
+DEFINITIONS
+
+    d_treat_session_service_req ==
+        a_Value,
+        StatusCode_service
+        :(
+            a_Value                  : t_Node +-> t_Variant          &
+            StatusCode_service       : t_StatusCode_i                &
+            StatusCode_service       : t_StatusCode                  &
+            a_Value                  : t_Node +-> t_Variant          &
+            dom(a_NodeClass|>{e_ncl_Variable}) <: dom(a_Value)       &
+            dom(a_Value) <: dom(a_NodeClass|>{e_ncl_Variable, e_ncl_VariableType})
+        )
+
+
+LOCAL_OPERATIONS
+
+    resp_msg_typ <-- get_response_type (req_msg_typ) =
+    PRE
+        req_msg_typ : t_msg_type_i &
+        req_msg_typ : t_msg_type &
+        req_msg_typ : s_service_reqs
+    THEN
+        resp_msg_typ :(resp_msg_typ : t_msg_type_i &
+                       resp_msg_typ : t_msg_type &
+                       resp_msg_typ : s_service_resps)
+    END
+    ;
+
+    StatusCode_service <-- treat_session_local_service_req (endpoint_config_idx, req_typ, req_msg, resp_msg) =
+    PRE
+        endpoint_config_idx : t_endpoint_config_idx_i &
+        endpoint_config_idx : t_endpoint_config_idx &
+        req_typ : t_msg_type_i &
+        req_typ = a_msg_in_type &
+        a_msg_in_type : s_service_on_session_reqs &
+        req_msg : t_msg_i &
+        req_msg = c_msg_in &
+        c_msg_in : t_msg &
+        resp_msg : t_msg_i &
+        resp_msg = c_msg_out &
+        c_msg_out : t_msg
+    THEN
+        StatusCode_service
+        :(  StatusCode_service : t_StatusCode_i &
+            StatusCode_service : t_StatusCode
+        )
+
+    END
+    ;
+
+    StatusCode_service <-- treat_session_nano_service_req (endpoint_config_idx, session, req_typ, req_msg, resp_msg) =
+    PRE
+        endpoint_config_idx : t_endpoint_config_idx_i &
+        endpoint_config_idx : t_endpoint_config_idx   &
+        session : t_session_i &
+        session : t_session &
+        req_typ : t_msg_type_i &
+        req_typ = a_msg_in_type &
+        a_msg_in_type : s_service_on_session_reqs &
+        c_msg_in_header : t_msg_header &
+        req_msg : t_msg_i &
+        req_msg = c_msg_in &
+        c_msg_in : t_msg &
+        resp_msg : t_msg_i &
+        resp_msg = c_msg_out &
+        c_msg_out : t_msg
+    THEN
+        d_treat_session_service_req
+    END
+    ;
+
+    StatusCode_service, async_resp_msg <-- treat_session_nano_extended_service_req (endpoint_config_idx, session, req_typ,
+                                                                                    req_handle, req_ctx, req_header, req_msg, resp_msg) =
+    PRE
+        endpoint_config_idx : t_endpoint_config_idx_i &
+        endpoint_config_idx : t_endpoint_config_idx   &
+        session : t_session_i &
+        session : t_session &
+        req_typ : t_msg_type_i &
+        req_typ = a_msg_in_type &
+        a_msg_in_type : s_service_on_session_reqs &
+        req_handle : t_server_request_handle_i &
+        req_ctx : t_request_context_i &
+        req_ctx : t_request_context &
+        req_header : t_msg_header_i &
+        req_header = c_msg_in_header &
+        c_msg_in_header : t_msg_header &
+        req_msg : t_msg_i &
+        req_msg = c_msg_in &
+        c_msg_in : t_msg &
+        resp_msg : t_msg_i &
+        resp_msg = c_msg_out &
+        c_msg_out : t_msg
+    THEN
+        d_treat_session_service_req ||
+        async_resp_msg :: BOOL
+    END
+    ;
+
+    StatusCode_service, async_resp_msg <-- treat_session_service_req (endpoint_config_idx, session, req_typ,
+                                                                      req_handle, req_ctx, req_header, req_msg, resp_msg) =
+    PRE
+        endpoint_config_idx : t_endpoint_config_idx_i &
+        endpoint_config_idx : t_endpoint_config_idx   &
+        session : t_session_i &
+        session : t_session &
+        req_typ : t_msg_type_i &
+        req_typ = a_msg_in_type &
+        a_msg_in_type : s_service_on_session_reqs &
+        req_handle : t_server_request_handle_i &
+        req_ctx : t_request_context_i &
+        req_ctx : t_request_context &
+        req_header : t_msg_header_i &
+        req_header = c_msg_in_header &
+        c_msg_in_header : t_msg_header &
+        req_msg : t_msg_i &
+        req_msg = c_msg_in &
+        c_msg_in : t_msg &
+        resp_msg : t_msg_i &
+        resp_msg = c_msg_out &
+        c_msg_out : t_msg
+    THEN
+        d_treat_session_service_req ||
+        async_resp_msg :: BOOL
+    END
+    ;
+
+    StatusCode_service <-- treat_discovery_service_req (endpoint_config_idx, req_typ, req_msg, resp_msg) =
+    PRE
+        endpoint_config_idx : t_endpoint_config_idx_i &
+        endpoint_config_idx : t_endpoint_config_idx &
+        req_typ : t_msg_type_i &
+        req_typ = a_msg_in_type &
+        a_msg_in_type : s_discovery_service_reqs &
+        req_msg : t_msg_i &
+        req_msg = c_msg_in &
+        resp_msg : t_msg_i &
+        resp_msg = c_msg_out
+    THEN
+        StatusCode_service
+        :(  StatusCode_service : t_StatusCode_i &
+            StatusCode_service : t_StatusCode
+        )
+
+    END
+    ;
+
+    ret, buffer_out, req_handle <-- local_client_discovery_service_request (channel, req_msg, app_context) =
+    PRE
+        channel     : t_channel_i &
+        channel     : t_channel &
+        req_msg     : t_msg_i &
+        req_msg     : t_msg &
+        app_context : t_application_context_i &
+        /* message is not yet set as output before call and deallocated after operation */
+        c_msg_out = req_msg &
+        c_msg_out_header = c_msg_header_indet &
+        a_msg_out_type : s_discovery_service_reqs
+    THEN
+        s_client_request_handle,
+        a_client_request_type,
+        a_client_request_resp_type,
+        a_client_request_channel,
+        a_client_request_context,
+        a_buffer_out_state
+        :(
+            s_client_request_handle    <: t_client_request_handle                             &
+            a_client_request_type      : s_client_request_handle --> s_service_reqs          &
+            a_client_request_resp_type : s_client_request_handle --> s_service_resps         &
+            a_client_request_channel   : s_client_request_handle --> t_channel               &
+            a_client_request_context   : s_client_request_handle --> t_application_context_i &
+            a_buffer_out_state         : t_buffer_out_state_i
+        ) ||
+        CHOICE
+            ret :: {e_sc_bad_out_of_memory,
+                e_sc_bad_invalid_argument, /* message has not expected type */
+                e_sc_bad_encoding_error} ||
+            buffer_out := c_byte_buffer_indet ||
+            req_handle := c_client_request_handle_indet
+        OR
+            ret := e_sc_ok ||
+            buffer_out :(buffer_out : t_byte_buffer_i & buffer_out : t_byte_buffer) ||
+            req_handle :(req_handle : t_client_request_handle_i & req_handle : t_client_request_handle)
+        END
+    END
+    ;
+
+    dealloc_msg_in_header_if_cond(p_cond, p_req_msg_header) =
+    PRE
+        p_cond           : BOOL &
+        p_req_msg_header : t_msg_header_i &
+        (   p_cond = TRUE
+            =>
+            p_req_msg_header = c_msg_in_header &
+            c_msg_in_header : t_msg_header)
+    THEN
+        c_msg_in_header :: t_msg_header_i
+    END
+
+
+OPERATIONS
+
+    resp_msg_typ <-- get_response_type (req_msg_typ) =
+    BEGIN
+        resp_msg_typ := c_msg_type_indet;
+        CASE req_msg_typ OF
+            EITHER e_msg_discovery_find_servers_req THEN
+                resp_msg_typ := e_msg_discovery_find_servers_resp
+            OR e_msg_discovery_find_servers_on_network_req THEN
+                resp_msg_typ := e_msg_discovery_find_servers_on_network_resp
+            OR e_msg_discovery_get_endpoints_req THEN
+                resp_msg_typ := e_msg_discovery_get_endpoints_resp
+            OR e_msg_discovery_register_server_req THEN
+                resp_msg_typ := e_msg_discovery_register_server_resp
+            OR e_msg_discovery_register_server2_req THEN
+                resp_msg_typ := e_msg_discovery_register_server2_resp
+            OR e_msg_session_create_req THEN
+                resp_msg_typ := e_msg_session_create_resp
+            OR e_msg_session_activate_req THEN
+                resp_msg_typ := e_msg_session_activate_resp
+            OR e_msg_session_close_req THEN
+                resp_msg_typ := e_msg_session_close_resp
+            OR e_msg_session_cancel_req THEN
+                resp_msg_typ := e_msg_session_cancel_resp
+            OR e_msg_node_add_nodes_req THEN
+                resp_msg_typ := e_msg_node_add_nodes_resp
+            OR e_msg_node_add_references_req THEN
+                resp_msg_typ := e_msg_node_add_references_resp
+            OR e_msg_node_delete_nodes_req THEN
+                resp_msg_typ := e_msg_node_delete_nodes_resp
+            OR e_msg_node_delete_references_req THEN
+                resp_msg_typ := e_msg_node_delete_references_resp
+            OR e_msg_view_browse_req THEN
+                resp_msg_typ := e_msg_view_browse_resp
+            OR e_msg_view_browse_next_req THEN
+                resp_msg_typ := e_msg_view_browse_next_resp
+            OR e_msg_view_translate_browse_paths_to_node_ids_req THEN
+                resp_msg_typ := e_msg_view_translate_browse_paths_to_node_ids_resp
+            OR e_msg_view_register_nodes_req THEN
+                resp_msg_typ := e_msg_view_register_nodes_resp
+            OR e_msg_view_unregister_nodes_req THEN
+                resp_msg_typ := e_msg_view_unregister_nodes_resp
+            OR e_msg_query_first_req THEN
+                resp_msg_typ := e_msg_query_first_resp
+            OR e_msg_query_next_req THEN
+                resp_msg_typ := e_msg_query_next_resp
+            OR e_msg_attribute_read_req THEN
+                resp_msg_typ := e_msg_attribute_read_resp
+            OR e_msg_attribute_history_read_req THEN
+                resp_msg_typ := e_msg_attribute_history_read_resp
+            OR e_msg_attribute_write_req THEN
+                resp_msg_typ := e_msg_attribute_write_resp
+            OR e_msg_attribute_history_update_req THEN
+                resp_msg_typ := e_msg_attribute_history_update_resp
+            OR e_msg_method_call_req THEN
+                resp_msg_typ := e_msg_method_call_resp
+            OR e_msg_monitored_items_create_req THEN
+                resp_msg_typ := e_msg_monitored_items_create_resp
+            OR e_msg_monitored_items_modify_req THEN
+                resp_msg_typ := e_msg_monitored_items_modify_resp
+            OR e_msg_monitored_items_set_monitoring_mode_req THEN
+                resp_msg_typ := e_msg_monitored_items_set_monitoring_mode_resp
+            OR e_msg_monitored_items_set_triggering_req THEN
+                resp_msg_typ := e_msg_monitored_items_set_triggering_resp
+            OR e_msg_monitored_items_delete_req THEN
+                resp_msg_typ := e_msg_monitored_items_delete_resp
+            OR e_msg_subscription_create_req THEN
+                resp_msg_typ := e_msg_subscription_create_resp
+            OR e_msg_subscription_modify_req THEN
+                resp_msg_typ := e_msg_subscription_modify_resp
+            OR e_msg_subscription_set_publishing_mode_req THEN
+                resp_msg_typ := e_msg_subscription_set_publishing_mode_resp
+            OR e_msg_subscription_publish_req THEN
+                resp_msg_typ := e_msg_subscription_publish_resp
+            OR e_msg_subscription_republish_req THEN
+                resp_msg_typ := e_msg_subscription_republish_resp
+            OR e_msg_subscription_transfer_subscriptions_req THEN
+                resp_msg_typ := e_msg_subscription_transfer_subscriptions_resp
+            OR e_msg_subscription_delete_subscriptions_req THEN
+                resp_msg_typ := e_msg_subscription_delete_subscriptions_resp
+            END
+        END
+    END
+    ;
+
+    StatusCode_service <-- treat_session_local_service_req (endpoint_config_idx, req_typ, req_msg, resp_msg) =
+    VAR
+        l_user,
+        l_supported_locales
+    IN
+        CASE req_typ OF
+            EITHER e_msg_attribute_read_req THEN
+                l_user <-- get_local_user (endpoint_config_idx);
+                l_supported_locales <-- get_SupportedLocales (endpoint_config_idx);
+                StatusCode_service <-- treat_read_request (l_user, l_supported_locales, req_msg, resp_msg)
+            OR e_msg_attribute_write_req THEN
+                // Write request case
+                l_user <-- get_local_user (endpoint_config_idx);
+                l_supported_locales <-- get_SupportedLocales (endpoint_config_idx);
+                StatusCode_service <-- treat_write_request (l_user, l_supported_locales, req_msg, resp_msg)
+            OR e_msg_view_browse_req THEN
+                StatusCode_service <-- treat_browse_request(c_session_indet, req_msg, resp_msg)
+            OR e_msg_view_translate_browse_paths_to_node_ids_req THEN
+                StatusCode_service <-- treat_translate_browse_paths_request(req_msg, resp_msg)
+            ELSE
+                /* NOTE: when implementing Node Management service set, service_set_view_service_node_management_used shall be called on success */
+                /* service is not supported */
+                StatusCode_service := e_sc_bad_service_unsupported
+            END
+        END
+    END
+    ;
+
+    StatusCode_service <-- treat_session_nano_service_req (endpoint_config_idx, session, req_typ, req_msg, resp_msg) =
+    VAR
+        l_user,
+        l_locales
+    IN
+        CASE req_typ OF
+            EITHER e_msg_attribute_read_req THEN
+                l_user <-- get_session_user_server(session);
+                l_locales <-- get_server_session_preferred_locales(session);
+                StatusCode_service <-- treat_read_request (l_user, l_locales, req_msg, resp_msg)
+            OR e_msg_attribute_write_req THEN
+                // Write request case
+                l_user <-- get_session_user_server(session);
+                l_locales <-- get_SupportedLocales (endpoint_config_idx);
+                StatusCode_service <-- treat_write_request (l_user, l_locales, req_msg, resp_msg)
+            OR e_msg_view_browse_req THEN
+                StatusCode_service <-- treat_browse_request(session, req_msg, resp_msg)
+            OR e_msg_view_browse_next_req THEN
+                StatusCode_service <-- treat_browse_next_request(session, req_msg, resp_msg)
+            OR e_msg_view_translate_browse_paths_to_node_ids_req THEN
+                StatusCode_service <-- treat_translate_browse_paths_request(req_msg, resp_msg)
+            OR e_msg_view_register_nodes_req THEN
+                StatusCode_service <-- treat_register_nodes_request (req_msg, resp_msg)
+            OR e_msg_view_unregister_nodes_req THEN
+                StatusCode_service <-- treat_unregister_nodes_request (req_msg)
+            ELSE
+                /* NOTE: when implementing Node Management service set, service_set_view_service_node_management_used shall be called on success */
+                /* service is not supported */
+                StatusCode_service := e_sc_bad_service_unsupported
+            END
+        END
+    END
+    ;
+
+    StatusCode_service, async_resp_msg <-- treat_session_nano_extended_service_req (endpoint_config_idx, session,
+                                                                                    req_typ, req_handle, req_ctx,
+                                                                                    req_header, req_msg, resp_msg) =
+    VAR
+        l_user
+    IN
+        async_resp_msg := FALSE;
+        CASE req_typ OF
+            EITHER e_msg_attribute_read_req, e_msg_attribute_write_req, e_msg_view_browse_req,
+                   e_msg_view_browse_next_req, e_msg_view_translate_browse_paths_to_node_ids_req,
+                   e_msg_view_register_nodes_req, e_msg_view_unregister_nodes_req
+            THEN
+                /* Nano profile services */
+                StatusCode_service <-- treat_session_nano_service_req (endpoint_config_idx, session, req_typ, req_msg, resp_msg)
+                /* Next services are out of the Nano scope */
+            OR e_msg_subscription_create_req THEN
+                StatusCode_service <-- treat_create_subscription_request (session, req_msg, resp_msg)
+            OR e_msg_subscription_modify_req THEN
+                StatusCode_service <-- treat_modify_subscription_request (session, req_msg, resp_msg)
+            OR e_msg_subscription_delete_subscriptions_req THEN
+                StatusCode_service <-- treat_delete_subscriptions_request (session, req_msg, resp_msg)
+            OR e_msg_subscription_set_publishing_mode_req THEN
+                StatusCode_service <-- treat_publishing_mode_request (session, req_msg, resp_msg)
+            OR e_msg_subscription_publish_req THEN
+                StatusCode_service, async_resp_msg
+                  <-- treat_subscription_publish_request (session, req_header, req_msg, req_handle, req_ctx, resp_msg)
+            OR e_msg_subscription_republish_req THEN
+                StatusCode_service <-- treat_subscription_republish_request (session, req_msg, resp_msg)
+            OR e_msg_monitored_items_create_req THEN
+                l_user <-- get_session_user_server(session);
+                StatusCode_service <-- treat_subscription_create_monitored_items_req (session, l_user, req_msg, resp_msg)
+            OR e_msg_method_call_req THEN
+                StatusCode_service <-- treat_method_call_request (session, req_msg, resp_msg)
+            ELSE
+                /* NOTE: when implementing Node Management service set, service_set_view_service_node_management_used shall be called on success */
+                /* service is not supported */
+                StatusCode_service := e_sc_bad_service_unsupported
+            END
+        END
+    END
+    ;
+
+    StatusCode_service, async_resp_msg <-- treat_session_service_req (endpoint_config_idx, session, req_typ, req_handle,
+                                                                      req_ctx, req_header, req_msg, resp_msg) =
+    BEGIN
+        async_resp_msg := FALSE;
+        IF c_Server_Nano_Extended = TRUE
+        THEN
+            StatusCode_service, async_resp_msg <-- treat_session_nano_extended_service_req
+             (endpoint_config_idx, session, req_typ, req_handle, req_ctx, req_header, req_msg, resp_msg)
+        ELSE
+            StatusCode_service <-- treat_session_nano_service_req (endpoint_config_idx, session, req_typ, req_msg, resp_msg)
+        END
+    END
+    ;
+
+    StatusCode_service <-- treat_discovery_service_req (endpoint_config_idx, req_typ, req_msg, resp_msg) =
+    VAR
+        l_ret
+    IN
+        CASE req_typ OF
+            EITHER e_msg_discovery_get_endpoints_req THEN
+                l_ret <-- treat_get_endpoints_request (req_msg, resp_msg, endpoint_config_idx)
+            OR e_msg_discovery_find_servers_req THEN
+                l_ret <-- treat_find_servers_request (req_msg, resp_msg, endpoint_config_idx)
+            OR e_msg_discovery_find_servers_on_network_req THEN
+                l_ret <-- treat_find_servers_on_network_request (req_msg, resp_msg)
+            OR e_msg_discovery_register_server2_req THEN
+                l_ret <-- treat_register_server2_request (req_msg, resp_msg)
+            ELSE
+                /* Cases shall cover all session services req types */
+                l_ret := e_sc_bad_service_unsupported
+            END
+        END;
+        StatusCode_service := l_ret
+    END;
+
+    ret, buffer_out, req_handle <-- local_client_discovery_service_request (channel, req_msg, app_context) =
+    VAR
+        l_msg_header,
+        l_valid_msg_header,
+        l_req_typ,
+        l_resp_typ,
+        l_req_handle,
+        l_valid_req_handle,
+        l_buffer,
+        l_valid_buffer,
+        l_channel_cfg
+    IN
+        l_buffer := c_byte_buffer_indet;
+        l_req_handle := c_client_request_handle_indet;
+        /* Set application message as output message */
+        l_req_typ <-- get_msg_out_type (req_msg);
+        CASE l_req_typ OF
+            /* Checks the type is a discovery request */
+            EITHER e_msg_discovery_find_servers_req,
+                e_msg_discovery_find_servers_on_network_req,
+                e_msg_discovery_get_endpoints_req,
+                e_msg_discovery_register_server_req,
+                e_msg_discovery_register_server2_req
+            THEN
+                l_resp_typ <-- get_response_type (l_req_typ);
+                l_msg_header <-- alloc_msg_header (TRUE);
+                l_valid_msg_header <-- is_valid_msg_out_header (l_msg_header);
+                l_req_handle <-- client_fresh_req_handle (l_req_typ, l_resp_typ, TRUE, app_context);
+                l_valid_req_handle <-- is_valid_req_handle (l_req_handle);
+                IF l_valid_req_handle = TRUE &
+                    l_valid_msg_header = TRUE
+                THEN
+                    set_req_handle_channel (l_req_handle, channel);
+                    client_write_msg_out_header_req_handle (l_msg_header, l_req_handle);
+                    l_channel_cfg <-- get_channel_info (channel);
+                    ret, l_buffer <-- encode_msg (l_channel_cfg, e_msg_request_type, l_req_typ, l_msg_header, req_msg);
+                    l_valid_buffer <-- is_valid_buffer_out (l_buffer);
+                    IF l_valid_buffer = FALSE
+                    THEN
+                        l_req_handle := c_client_request_handle_indet
+                    END
+                ELSE
+                    l_req_handle := c_client_request_handle_indet;
+                    ret := e_sc_bad_out_of_memory
+                END;
+                IF l_valid_msg_header = TRUE
+                THEN
+                    dealloc_msg_header_out (l_msg_header)
+                END
+            ELSE
+                ret := e_sc_bad_invalid_argument
+            END
+        END;
+        buffer_out := l_buffer;
+        req_handle := l_req_handle
+    END
+    ;
+
+    dealloc_msg_in_header_if_cond (p_cond, p_req_msg_header) =
+    IF  p_cond = TRUE
+    THEN
+        dealloc_msg_in_header (p_req_msg_header)
+    END
+    ;
+
+
+
+    /* END OF LOCAL OPERATIONS */
+
+    valid, resp_typ <-- client_service_fault_to_resp_type (msg_buffer) =
+    VAR
+        l_request_handle
+    IN
+        l_request_handle <-- decode_service_fault_msg_req_handle (msg_buffer);
+        valid <-- is_valid_req_handle (l_request_handle);
+        IF valid = TRUE
+        THEN
+            resp_typ <-- get_req_handle_resp_typ (l_request_handle)
+        ELSE
+            resp_typ := c_msg_type_indet
+        END
+    END
+    ;
+
+    valid_req, sc, buffer_out <-- server_receive_session_treatment_req (channel, req_typ, msg_buffer) =
+    VAR
+        l_req_msg_header,
+        l_valid_req_header,
+        l_req_msg,
+        l_valid_req,
+        l_request_handle,
+        l_session_token,
+        l_resp_msg_typ,
+        l_resp_msg,
+        l_valid_msg,
+        l_resp_msg_header,
+        l_valid_resp_header,
+        l_session,
+        l_ret,
+        l_buffer_out,
+        l_valid_buffer,
+        l_channel_cfg
+    IN
+        l_valid_req := FALSE;
+        sc := c_StatusCode_indet;
+        l_buffer_out := c_byte_buffer_indet;
+        l_req_msg_header <-- decode_msg_header (TRUE, msg_buffer);
+        l_valid_req_header <-- is_valid_msg_in_header (l_req_msg_header);
+        IF l_valid_req_header = TRUE
+        THEN
+            l_request_handle <-- server_read_msg_header_req_handle (l_req_msg_header);
+            l_session_token <-- read_msg_req_header_session_token (l_req_msg_header);
+            /* TODO: check request session token before decoding message */
+            l_req_msg <-- decode_msg (req_typ, msg_buffer);
+            l_valid_req <-- is_valid_msg_in (l_req_msg);
+            IF l_valid_req = TRUE
+            THEN
+                l_resp_msg_typ <-- get_response_type (req_typ);
+                l_resp_msg_header, l_resp_msg <-- alloc_resp_msg (l_resp_msg_typ);
+                l_valid_msg <-- is_valid_msg_out (l_resp_msg);
+                l_valid_resp_header <-- is_valid_msg_out_header (l_resp_msg_header);
+                IF l_valid_msg = TRUE &
+                    l_valid_resp_header = TRUE
+                THEN
+                    l_session, l_ret <-- server_receive_session_req (channel, l_session_token, l_req_msg, req_typ, l_resp_msg);
+                    IF l_ret /= e_sc_ok
+                    THEN
+                        /* Part 4 §5.3: if the Service itself failed [...] a ServiceFault is returned. */
+                        l_resp_msg_typ := e_msg_service_fault_resp
+                    END;
+                    write_msg_resp_header_service_status (l_resp_msg_header, l_ret);
+                    server_write_msg_out_header_req_handle (l_resp_msg_header, l_request_handle);
+                    l_channel_cfg <-- get_channel_info (channel);
+                    sc, l_buffer_out <-- encode_msg (l_channel_cfg, e_msg_response_type, l_resp_msg_typ, l_resp_msg_header, l_resp_msg);
+                    l_valid_buffer <-- is_valid_buffer_out (l_buffer_out);
+                    IF l_valid_buffer = FALSE
+                    THEN
+                        /* invalid encoding => close session */
+                        server_close_session (l_session, e_sc_bad_encoding_error)
+                    END;
+
+                    /* response message structures not necessary anymore */
+                    dealloc_msg_header_out (l_resp_msg_header);
+                    dealloc_msg_out (l_resp_msg)
+                ELSE
+                    /* In other cases than out of memory, request shall have been discarded previously */
+                    sc := e_sc_bad_out_of_memory
+                END;
+                /* request message not necessary anymore */
+                dealloc_msg_in (l_req_msg)
+            END /* DECODE REQ CHECK */
+        END; /* DECODE REQ HEADER CHECK */
+        IF l_valid_req_header = TRUE
+        THEN
+            dealloc_msg_in_header (l_req_msg_header)
+        END;
+        /* In any case buffer will not be used anymore after this operation */
+        dealloc_msg_in_buffer (msg_buffer);
+        buffer_out := l_buffer_out;
+        valid_req := bool(l_valid_req_header = TRUE & l_valid_req = TRUE)
+    END
+    ;
+
+    client_receive_session_treatment_resp (channel, resp_typ, msg_buffer) =
+    VAR
+        l_resp_msg_header,
+        l_valid_resp_header,
+        l_resp_msg,
+        l_valid_resp,
+        l_request_handle,
+        l_validated_req_handle,
+        l_session
+    IN
+        l_resp_msg_header <-- decode_msg_header (FALSE, msg_buffer);
+        l_valid_resp_header <-- is_valid_msg_in_header (l_resp_msg_header);
+        IF l_valid_resp_header = TRUE
+        THEN
+            l_request_handle <-- client_read_msg_header_req_handle (l_resp_msg_header);
+            l_validated_req_handle <-- client_validate_response_request_handle (channel, l_request_handle, resp_typ);
+            IF l_validated_req_handle = TRUE
+            THEN
+                l_resp_msg <-- decode_msg (resp_typ, msg_buffer);
+                l_valid_resp <-- is_valid_msg_in (l_resp_msg);
+                IF l_valid_resp = TRUE
+                THEN
+                    l_session <-- client_receive_session_resp (channel, l_request_handle, resp_typ, l_resp_msg_header, l_resp_msg);
+                    client_remove_req_handle (l_request_handle);
+                    /* resp message not used anymore => deallocate */
+                    dealloc_msg_in (l_resp_msg)
+                END; /* DECODE RESP CHECK */
+                client_remove_req_handle (l_request_handle)
+            END /* VALID RESP HEADER CHECK */
+        END; /* DECODE RESP HEADER CHECK */
+
+        IF l_valid_resp_header = TRUE
+        THEN
+            /* resp header message not used anymore => deallocate */
+            dealloc_msg_in_header (l_resp_msg_header)
+        END;
+
+        /* In any case buffer will not be used anymore after this operation */
+        dealloc_msg_in_buffer (msg_buffer)
+    END
+    ;
+
+    valid_req, async_resp, sc, buffer_out <-- server_receive_session_service_req (channel, req_typ, req_context, msg_buffer) =
+    VAR
+        l_req_msg_header,
+        l_valid_req_header,
+        l_request_handle,
+        l_session_token,
+        l_is_valid_req_on_session,
+        l_session,
+        l_req_msg,
+        l_valid_req,
+        l_resp_msg_allocated,
+        l_resp_msg_typ,
+        l_resp_msg,
+        l_valid_msg,
+        l_resp_msg_header,
+        l_valid_resp_header,
+        l_ret,
+        l_ret2,
+        l_is_valid_resp,
+        l_buffer_out,
+        l_session_channel,
+        l_endpoint_config_idx,
+        l_is_valid_ep_config_idx,
+        l_channel_cfg
+    IN
+        sc := c_StatusCode_indet;
+        l_is_valid_req_on_session := FALSE;
+        l_valid_req := FALSE;
+        l_resp_msg_typ := c_msg_type_indet;
+        l_resp_msg_header := c_msg_header_indet;
+        l_resp_msg := c_msg_indet;
+        async_resp := FALSE;
+        l_valid_msg := FALSE;
+        l_valid_resp_header := FALSE;
+        l_resp_msg_allocated := FALSE;
+        l_buffer_out := c_byte_buffer_indet;
+        l_req_msg_header <-- decode_msg_header (TRUE, msg_buffer);
+        l_valid_req_header <-- is_valid_msg_in_header (l_req_msg_header);
+        IF l_valid_req_header = TRUE
+        THEN
+            /* Check request handle */
+            l_request_handle <-- server_read_msg_header_req_handle (l_req_msg_header);
+            /* Check valid session token used */
+            l_session_token <-- read_msg_req_header_session_token (l_req_msg_header);
+            l_is_valid_req_on_session, l_session, l_ret <-- server_validate_session_service_req (channel, l_session_token);
+            l_endpoint_config_idx <-- server_get_endpoint_config (channel);
+            l_is_valid_ep_config_idx <-- is_valid_endpoint_config_idx (l_endpoint_config_idx);
+            IF l_is_valid_req_on_session = TRUE & l_is_valid_ep_config_idx = TRUE
+            THEN
+                /* Decode message */
+                l_req_msg <-- decode_msg (req_typ, msg_buffer);
+                l_valid_req <-- is_valid_msg_in (l_req_msg);
+                IF l_valid_req = TRUE
+                THEN
+                    /* Allocate response message */
+                    l_resp_msg_typ <-- get_response_type (req_typ);
+                    l_resp_msg_header, l_resp_msg <-- alloc_resp_msg (l_resp_msg_typ);
+                    l_valid_msg <-- is_valid_msg_out (l_resp_msg);
+                    l_valid_resp_header <-- is_valid_msg_out_header (l_resp_msg_header);
+                    IF l_valid_msg = TRUE &
+                        l_valid_resp_header = TRUE
+                    THEN
+                        l_resp_msg_allocated := TRUE;
+                        // Call local operation to dispatch the service request on right service
+                        l_ret, async_resp
+                              <-- treat_session_service_req (l_endpoint_config_idx,
+                                                             l_session,
+                                                             req_typ,
+                                                             l_request_handle,
+                                                             req_context,
+                                                             l_req_msg_header,
+                                                             l_req_msg,
+                                                             l_resp_msg);
+
+                        // TODO: next operation not necessary ?
+                        l_is_valid_resp, l_ret2, l_session_channel
+                          <-- server_validate_session_service_resp (l_session);
+                        IF l_ret2 /= e_sc_ok
+                        THEN
+                            /* In case there is an issue with the session, it overwrites the possible service issue */
+                            l_ret := l_ret2
+                            ELSIF l_session_channel /= channel
+                            THEN
+                                l_ret := e_sc_bad_unexpected_error
+                        END
+                    END;
+                    /* request message not necessary anymore */
+                    dealloc_msg_in (l_req_msg)
+                ELSE
+                    l_ret := e_sc_bad_decoding_error
+                END /* DECODE REQ CHECK */
+            ELSE // l_is_valid_req_on_session = FALSE:
+                // Note: consider message valid if we do not evaluate it due to session invalid token but we will send a service fault anyway
+                l_valid_req := TRUE
+            END; /* VALID SESSION REQ CHECK */
+            IF l_resp_msg_allocated = FALSE THEN
+                /* Allocate error response message if not allocated (degraded case) */
+                l_resp_msg_header, l_resp_msg <-- alloc_resp_msg (e_msg_service_fault_resp);
+                l_valid_msg <-- is_valid_msg_out (l_resp_msg);
+                l_valid_resp_header <-- is_valid_msg_out_header (l_resp_msg_header)
+            END;
+            /* Encode the message (nominal and degraded cases) */
+            IF l_valid_msg = TRUE &
+               l_valid_resp_header = TRUE &
+               async_resp = FALSE
+            THEN
+                IF l_ret /= e_sc_ok
+                THEN
+                    /* Part 4 §5.3: if the Service itself failed [...] a ServiceFault is returned. */
+                    l_resp_msg_typ := e_msg_service_fault_resp
+                END;
+                server_write_msg_out_header_req_handle (l_resp_msg_header, l_request_handle);
+                write_msg_resp_header_service_status (l_resp_msg_header, l_ret);
+                /* Response message encoded */
+                l_channel_cfg <-- get_channel_info (channel);
+                sc, l_buffer_out <-- encode_msg (l_channel_cfg, e_msg_response_type, l_resp_msg_typ, l_resp_msg_header, l_resp_msg);
+                /* response message structures not necessary anymore */
+                dealloc_msg_header_out (l_resp_msg_header);
+                dealloc_msg_out (l_resp_msg)
+            ELSIF l_valid_msg = TRUE &
+                    l_valid_resp_header = TRUE &
+                    async_resp = TRUE
+            THEN
+                /* response header is deallocated but
+                   response message is not deallocated since it will be sent later */
+                forget_resp_msg_out(l_resp_msg_header, l_resp_msg)
+            ELSE
+                /* Failed to allocate the response */
+                sc := e_sc_bad_out_of_memory
+            END
+        END; /* DECODE REQ HEADER CHECK */
+        IF l_valid_req_header = TRUE
+        THEN
+            dealloc_msg_in_header (l_req_msg_header)
+        END;
+        /* In any case buffer will not be used anymore after this operation */
+        dealloc_msg_in_buffer (msg_buffer);
+        buffer_out := l_buffer_out;
+        valid_req := bool(l_valid_req_header = TRUE & l_valid_req = TRUE)
+    END
+    ;
+
+    client_receive_session_service_resp (channel, resp_typ, msg_buffer) =
+    VAR
+        l_resp_msg_header,
+        l_valid_resp_header,
+        l_request_handle,
+        l_validated_req_handle,
+        l_user_app_context,
+        l_is_applicative_response,
+        l_is_valid_session_resp,
+        l_session,
+        l_resp_msg,
+        l_valid_resp_msg
+    IN
+        l_resp_msg_header <-- decode_msg_header (FALSE, msg_buffer);
+        l_valid_resp_header <-- is_valid_msg_in_header (l_resp_msg_header);
+        IF l_valid_resp_header = TRUE
+        THEN
+            l_request_handle <-- client_read_msg_header_req_handle (l_resp_msg_header);
+            l_validated_req_handle <-- client_validate_response_request_handle (channel, l_request_handle, resp_typ);
+            IF l_validated_req_handle = TRUE
+            THEN
+                l_is_applicative_response, l_user_app_context <-- get_req_handle_app_context (l_request_handle);
+                l_is_valid_session_resp, l_session <-- client_validate_session_service_resp (channel, l_request_handle);
+                IF l_is_valid_session_resp = TRUE
+                THEN
+                    l_resp_msg <-- decode_msg (resp_typ, msg_buffer);
+                    l_valid_resp_msg <-- is_valid_msg_in (l_resp_msg);
+                    IF l_valid_resp_msg = TRUE &
+                        l_is_applicative_response = TRUE
+                    THEN
+                        copy_msg_resp_header_into_msg (l_resp_msg_header, l_resp_msg);
+                        /* For services on session IN response messages is provided to applicative */
+                        cli_service_response (l_session, l_resp_msg, l_user_app_context);
+                        forget_resp_msg_in (l_resp_msg_header, l_resp_msg)
+                    ELSE
+                        dealloc_msg_in_header (l_resp_msg_header)
+                    END /* DECODE RESP CHECK */
+                ELSE
+                    dealloc_msg_in_header (l_resp_msg_header)
+                END; /* VALID REQ HANDLE ASSOCIATED TO A VALID SESSION */
+                client_remove_req_handle (l_request_handle)
+            ELSE
+                dealloc_msg_in_header (l_resp_msg_header)
+            END /* VALID REQ HANDLE */
+        END; /* DECODE RESP HEADER CHECK */
+
+        /* In any case buffer will not be used anymore after this operation */
+        dealloc_msg_in_buffer (msg_buffer)
+    END
+    ;
+
+    valid_req, sc, buffer_out <-- server_receive_discovery_service_req (channel, req_typ, msg_buffer) =
+    VAR
+        l_req_msg_header,
+        l_valid_req_header,
+        l_request_handle,
+        l_req_msg,
+        l_valid_req,
+        l_resp_msg_typ,
+        l_resp_msg,
+        l_valid_msg,
+        l_resp_msg_header,
+        l_valid_resp_header,
+        l_endpoint_config_idx,
+        l_ret,
+        l_buffer_out,
+        l_channel_cfg
+    IN
+        sc := c_StatusCode_indet;
+        l_valid_req := FALSE;
+        l_buffer_out := c_byte_buffer_indet;
+        l_req_msg_header <-- decode_msg_header (TRUE, msg_buffer);
+        l_valid_req_header <-- is_valid_msg_in_header (l_req_msg_header);
+        IF l_valid_req_header = TRUE
+        THEN
+            /* Check request handle */
+            l_request_handle <-- server_read_msg_header_req_handle (l_req_msg_header);
+            /* Decode message */
+            l_req_msg <-- decode_msg (req_typ, msg_buffer);
+            l_valid_req <-- is_valid_msg_in (l_req_msg);
+            IF l_valid_req = TRUE
+            THEN
+                /* Allocate response */
+                l_resp_msg_typ <-- get_response_type (req_typ);
+                l_resp_msg_header, l_resp_msg <-- alloc_resp_msg (l_resp_msg_typ);
+                l_valid_msg <-- is_valid_msg_out (l_resp_msg);
+                l_valid_resp_header <-- is_valid_msg_out_header (l_resp_msg_header);
+                IF l_valid_msg = TRUE &
+                    l_valid_resp_header = TRUE
+                THEN
+                    l_endpoint_config_idx <-- server_get_endpoint_config (channel);
+                    l_ret <-- treat_discovery_service_req (l_endpoint_config_idx, req_typ, l_req_msg, l_resp_msg);
+                    write_msg_resp_header_service_status (l_resp_msg_header, l_ret);
+                    IF l_ret /= e_sc_ok
+                    THEN
+                        /* Part 4 §5.3: if the Service itself failed [...] a ServiceFault is returned. */
+                        l_resp_msg_typ := e_msg_service_fault_resp
+                    END;
+                    server_write_msg_out_header_req_handle (l_resp_msg_header, l_request_handle);
+
+                    /* Response message encoded */
+                    l_channel_cfg <-- get_channel_info (channel);
+                    sc, l_buffer_out <-- encode_msg (l_channel_cfg, e_msg_response_type, l_resp_msg_typ, l_resp_msg_header, l_resp_msg);
+
+                    /* response message structures not necessary anymore */
+                    dealloc_msg_header_out (l_resp_msg_header);
+                    dealloc_msg_out (l_resp_msg)
+                ELSE
+                    /* In other cases than out of memory, request shall have been discarded previously */
+                    sc := e_sc_bad_out_of_memory
+                END;
+                /* request message not necessary anymore */
+                dealloc_msg_in (l_req_msg)
+            END /* DECODE REQ CHECK */
+        END; /* DECODE REQ HEADER CHECK */
+        IF l_valid_req_header = TRUE
+        THEN
+            dealloc_msg_in_header (l_req_msg_header)
+        END;
+        /* In any case buffer will not be used anymore after this operation */
+        dealloc_msg_in_buffer (msg_buffer);
+        buffer_out := l_buffer_out;
+        valid_req := bool(l_valid_req_header = TRUE & l_valid_req = TRUE)
+    END
+    ;
+
+    client_receive_discovery_service_resp (channel, resp_typ, msg_buffer) =
+    VAR
+        l_resp_msg_header,
+        l_valid_resp_header,
+        l_request_handle,
+        l_validated_req_handle,
+        l_is_applicative_response,
+        l_user_app_context,
+        l_resp_msg,
+        l_valid_resp_msg
+    IN
+        l_resp_msg_header <-- decode_msg_header (FALSE, msg_buffer);
+        l_valid_resp_header <-- is_valid_msg_in_header (l_resp_msg_header);
+        IF l_valid_resp_header = TRUE
+        THEN
+            l_request_handle <-- client_read_msg_header_req_handle (l_resp_msg_header);
+            l_validated_req_handle <-- client_validate_response_request_handle (channel, l_request_handle, resp_typ);
+            IF l_validated_req_handle = TRUE
+            THEN
+                l_is_applicative_response, l_user_app_context <-- get_req_handle_app_context (l_request_handle);
+                l_resp_msg <-- decode_msg (resp_typ, msg_buffer);
+                l_valid_resp_msg <-- is_valid_msg_in (l_resp_msg);
+                IF l_valid_resp_msg = TRUE &
+                    l_is_applicative_response = TRUE
+                THEN
+                    copy_msg_resp_header_into_msg (l_resp_msg_header, l_resp_msg);
+                    /* For services on session IN response messages is provided to applicative */
+                    cli_service_response (c_session_indet, l_resp_msg, l_user_app_context);
+                    forget_resp_msg_in (l_resp_msg_header, l_resp_msg)
+                ELSE
+                    dealloc_msg_in_header (l_resp_msg_header)
+                END; /* DECODE RESP CHECK */
+                client_remove_req_handle (l_request_handle)
+            ELSE
+                dealloc_msg_in_header (l_resp_msg_header)
+            END /* VALID REQ HANDLE */
+        END; /* DECODE RESP HEADER CHECK */
+        /* In any case buffer will not be used anymore after this operation */
+        dealloc_msg_in_buffer (msg_buffer)
+    END
+    ;
+
+    /* SERVER local services */
+
+    ret <-- server_receive_local_service_req (endpoint_config_idx, req_class, req_typ, req_msg, app_context) =
+    VAR
+        l_prev_local_treatment,
+        l_resp_msg_typ,
+        l_resp_msg_header,
+        l_resp_msg,
+        l_valid_msg,
+        l_valid_resp_header,
+        l_ret
+    IN
+        l_prev_local_treatment <-- is_local_service_treatment;
+        set_local_service_treatment (TRUE);
+        CASE req_class OF
+            EITHER e_msg_session_service_class,
+                e_msg_discovery_service_class
+            THEN
+                l_resp_msg_typ <-- get_response_type (req_typ);
+                l_resp_msg_header, l_resp_msg <-- alloc_resp_msg (l_resp_msg_typ);
+                l_valid_msg <-- is_valid_msg_out (l_resp_msg);
+                l_valid_resp_header <-- is_valid_msg_out_header (l_resp_msg_header)
+            ELSE
+                l_resp_msg_header, l_resp_msg <-- alloc_resp_msg (e_msg_service_fault_resp);
+                l_valid_msg <-- is_valid_msg_out (l_resp_msg);
+                l_valid_resp_header <-- is_valid_msg_out_header (l_resp_msg_header)
+            END
+        END;
+        IF l_valid_msg = TRUE &
+            l_valid_resp_header = TRUE
+        THEN
+            ret := e_sc_ok;
+            bless_msg_in (req_msg);
+            CASE req_class OF
+                EITHER e_msg_session_service_class THEN
+                    l_ret <-- treat_session_local_service_req (endpoint_config_idx, req_typ, req_msg, l_resp_msg)
+                OR e_msg_discovery_service_class THEN
+                    l_ret <-- treat_discovery_service_req (endpoint_config_idx, req_typ, req_msg, l_resp_msg)
+                ELSE
+                    l_ret := e_sc_bad_service_unsupported
+                END
+            END;
+            write_msg_resp_header_service_status (l_resp_msg_header, l_ret);
+            copy_msg_resp_header_into_msg_out (l_resp_msg_header, l_resp_msg);
+            srv_service_response (endpoint_config_idx, l_resp_msg, app_context);
+            forget_resp_msg_out (l_resp_msg_header, l_resp_msg);
+            dealloc_msg_in (req_msg)
+        ELSE
+            ret := e_sc_bad_out_of_memory
+        END;
+        set_local_service_treatment (l_prev_local_treatment)
+    END
+    ;
+
+    /* CLIENT APP EVENTS (or internally generated events for async activation) */
+
+    buffer_out, req_handle <-- client_service_create_session (session, channel) =
+    VAR
+        l_msg_header,
+        l_valid_msg_header,
+        l_req_msg,
+        l_req_handle,
+        l_valid_req_handle,
+        l_valid_msg,
+        l_buffer,
+        l_sc,
+        l_valid_buffer,
+        l_bret,
+        l_channel_cfg
+    IN
+        l_buffer := c_byte_buffer_indet;
+        l_req_handle := c_client_request_handle_indet;
+        l_msg_header, l_req_msg <-- alloc_req_msg (e_msg_session_create_req);
+        l_valid_msg <-- is_valid_msg_out (l_req_msg);
+        l_valid_msg_header <-- is_valid_msg_out_header (l_msg_header);
+        IF l_valid_msg_header = TRUE &
+            l_valid_msg = TRUE
+        THEN
+            l_req_handle <-- client_fresh_req_handle (e_msg_session_create_req,
+                                                      e_msg_session_create_resp,
+                                                      FALSE,
+                                                      c_no_application_context);
+            l_valid_req_handle <-- is_valid_req_handle (l_req_handle);
+            IF l_valid_req_handle  = TRUE
+            THEN
+                set_req_handle_channel (l_req_handle, channel);
+                l_bret <-- client_create_session_req (session, channel, l_req_handle, l_req_msg);
+                IF l_bret = TRUE
+                THEN
+                    client_write_msg_out_header_req_handle (l_msg_header, l_req_handle);
+                    l_channel_cfg <-- get_channel_info (channel);
+                    l_sc, l_buffer <-- encode_msg (l_channel_cfg, e_msg_request_type, e_msg_session_create_req, l_msg_header, l_req_msg);
+                    l_valid_buffer <-- is_valid_buffer_out (l_buffer);
+                    IF l_valid_buffer = FALSE
+                    THEN
+                        /* Close session if impossible to create session */
+                        client_remove_req_handle (l_req_handle);
+                        client_close_session (session, l_sc)
+                    END
+                ELSE
+                    client_remove_req_handle (l_req_handle);
+                    client_close_session (session, e_sc_bad_internal_error)
+                END
+            ELSE
+                client_close_session (session, e_sc_bad_out_of_memory)
+            END;
+            dealloc_msg_header_out (l_msg_header);
+            dealloc_msg_out (l_req_msg)
+        END;
+        buffer_out := l_buffer;
+        req_handle := l_req_handle
+    END
+    ;
+
+    buffer_out, req_handle <-- client_service_activate_orphaned_session (session, channel) =
+    VAR
+        l_msg_header,
+        l_req_msg,
+        l_valid_msg,
+        l_valid_msg_header,
+        l_req_handle,
+        l_valid_req_handle,
+        l_ret,
+        l_session_token,
+        l_buffer,
+        l_sc,
+        l_valid_buffer,
+        l_channel_cfg
+    IN
+        l_buffer := c_byte_buffer_indet;
+        l_req_handle := c_client_request_handle_indet;
+        l_msg_header, l_req_msg <-- alloc_req_msg (e_msg_session_activate_req);
+        l_valid_msg <-- is_valid_msg_out (l_req_msg);
+        l_valid_msg_header <-- is_valid_msg_out_header (l_msg_header);
+        IF l_valid_msg = TRUE &
+            l_valid_msg_header = TRUE
+        THEN
+            l_req_handle <-- client_fresh_req_handle (e_msg_session_activate_req,
+                                                      e_msg_session_activate_resp,
+                                                      FALSE,
+                                                      c_no_application_context);
+            l_valid_req_handle <-- is_valid_req_handle (l_req_handle);
+            IF l_valid_req_handle = TRUE
+            THEN
+                set_req_handle_channel (l_req_handle, channel);
+                l_ret, l_session_token <-- client_sc_activate_session_req (session, l_req_handle, channel, l_req_msg);
+                IF l_ret = e_sc_ok
+                THEN
+                    client_write_msg_out_header_req_handle(l_msg_header, l_req_handle);
+                    write_msg_out_header_session_token(l_msg_header, l_session_token);
+                    l_channel_cfg <-- get_channel_info (channel);
+                    l_sc, l_buffer <-- encode_msg (l_channel_cfg, e_msg_request_type, e_msg_session_activate_req, l_msg_header, l_req_msg);
+                    l_valid_buffer <-- is_valid_buffer_out (l_buffer);
+                    IF l_valid_buffer = FALSE
+                    THEN
+                        /* If reactivation encoding failed, close the session */
+                        client_remove_req_handle (l_req_handle);
+                        client_close_session (session, l_sc)
+                    END
+                END
+            END;
+            dealloc_msg_header_out (l_msg_header);
+            dealloc_msg_out (l_req_msg)
+        ELSE
+            client_close_session (session, e_sc_bad_out_of_memory)
+        END;
+        buffer_out := l_buffer;
+        req_handle := l_req_handle
+    END
+    ;
+
+    ret, channel, buffer_out, req_handle <-- client_service_activate_session (session, p_user_token) =
+    VAR
+        l_msg_header,
+        l_valid_msg_header,
+        l_req_msg,
+        l_valid_msg,
+        l_ret,
+        l_channel,
+        l_req_handle,
+        l_valid_req_handle,
+        l_session_token,
+        l_buffer,
+        l_valid_buffer,
+        l_channel_cfg
+    IN
+        l_channel := c_channel_indet;
+        l_buffer := c_byte_buffer_indet;
+        l_req_handle := c_client_request_handle_indet;
+        l_msg_header, l_req_msg <-- alloc_req_msg (e_msg_session_activate_req);
+        l_valid_msg <-- is_valid_msg_out (l_req_msg);
+        l_valid_msg_header <-- is_valid_msg_out_header (l_msg_header);
+        IF l_valid_msg = TRUE &
+            l_valid_msg_header = TRUE
+        THEN
+            l_req_handle <-- client_fresh_req_handle (e_msg_session_activate_req,
+                                                      e_msg_session_activate_resp,
+                                                      FALSE,
+                                                      c_no_application_context);
+            l_valid_req_handle <-- is_valid_req_handle (l_req_handle);
+            IF l_valid_req_handle = TRUE
+            THEN
+                l_ret, l_channel, l_session_token <-- client_user_activate_session_req (session, l_req_handle, p_user_token, l_req_msg);
+                IF l_ret = e_sc_ok
+                THEN
+                    set_req_handle_channel (l_req_handle, l_channel);
+                    client_write_msg_out_header_req_handle(l_msg_header, l_req_handle);
+                    write_msg_out_header_session_token(l_msg_header, l_session_token);
+                    l_channel_cfg <-- get_channel_info (l_channel);
+                    l_ret , l_buffer <-- encode_msg (l_channel_cfg, e_msg_request_type, e_msg_session_activate_req, l_msg_header, l_req_msg);
+                    l_valid_buffer <-- is_valid_buffer_out (l_buffer);
+                    IF l_valid_buffer = FALSE
+                    THEN
+                        client_remove_req_handle (l_req_handle);
+                        l_channel := c_channel_indet;
+                        client_close_session (session, l_ret)
+                    END
+                ELSE
+                    client_close_session (session, l_ret)
+                END
+            ELSE
+                client_close_session (session, e_sc_bad_out_of_memory);
+                l_ret := e_sc_bad_out_of_memory
+            END;
+            dealloc_msg_header_out (l_msg_header);
+            dealloc_msg_out (l_req_msg)
+        ELSE
+            client_close_session (session, e_sc_bad_out_of_memory);
+            l_ret := e_sc_bad_out_of_memory
+        END;
+        ret := l_ret;
+        channel := l_channel;
+        req_handle := l_req_handle;
+        buffer_out := l_buffer
+    END
+    ;
+
+    ret, channel, buffer_out, req_handle <-- client_service_close_session (session) =
+    VAR
+        l_msg_header,
+        l_valid_msg_header,
+        l_req_msg,
+        l_valid_msg,
+        l_channel,
+        l_req_handle,
+        l_valid_req_handle,
+        l_session_token,
+        l_buffer,
+        l_valid_buffer,
+        l_channel_cfg
+    IN
+        l_channel := c_channel_indet;
+        l_buffer := c_byte_buffer_indet;
+        l_req_handle := c_client_request_handle_indet;
+        l_msg_header, l_req_msg <-- alloc_req_msg (e_msg_session_close_req);
+        l_valid_msg <-- is_valid_msg_out (l_req_msg);
+        l_valid_msg_header <-- is_valid_msg_out_header (l_msg_header);
+        IF l_valid_msg = TRUE &
+            l_valid_msg_header = TRUE
+        THEN
+            l_req_handle <-- client_fresh_req_handle (e_msg_session_close_req,
+                                                      e_msg_session_close_resp,
+                                                      FALSE,
+                                                      c_no_application_context);
+            l_valid_req_handle <-- is_valid_req_handle (l_req_handle);
+            IF l_valid_req_handle = TRUE
+            THEN
+
+                ret, l_channel, l_session_token <-- client_close_session_req (session, l_req_handle, l_req_msg);
+                IF ret = e_sc_ok
+                THEN
+                    set_req_handle_channel (l_req_handle, l_channel);
+                    client_write_msg_out_header_req_handle(l_msg_header, l_req_handle);
+                    write_msg_out_header_session_token(l_msg_header, l_session_token);
+                    l_channel_cfg <-- get_channel_info (l_channel);
+                    ret, l_buffer <-- encode_msg (l_channel_cfg, e_msg_request_type, e_msg_session_close_req, l_msg_header, l_req_msg);
+                    l_valid_buffer <-- is_valid_buffer_out (l_buffer);
+                    IF l_valid_buffer = FALSE
+                    THEN
+                        l_channel := c_channel_indet;
+                        client_remove_req_handle (l_req_handle);
+                        client_close_session (session, ret)
+                    END
+                END
+            ELSE
+                ret := e_sc_bad_out_of_memory
+            END;
+            dealloc_msg_header_out (l_msg_header);
+            dealloc_msg_out (l_req_msg)
+        ELSE
+            ret := e_sc_bad_out_of_memory
+        END;
+        channel := l_channel;
+        buffer_out := l_buffer;
+        req_handle := l_req_handle
+    END
+    ;
+
+    ret, channel, buffer_out, req_handle <-- client_service_request (session, req_msg, app_context) =
+    VAR
+        l_msg_header,
+        l_valid_msg_header,
+        l_req_typ,
+        l_resp_typ,
+        l_valid_msg,
+        l_channel,
+        l_req_handle,
+        l_valid_req_handle,
+        l_session_token,
+        l_buffer,
+        l_valid_buffer,
+        l_valid_channel,
+        l_channel_cfg
+    IN
+        l_channel := c_channel_indet;
+        l_buffer := c_byte_buffer_indet;
+        l_req_handle := c_client_request_handle_indet;
+        /* Set application message as output message */
+        bless_msg_out (req_msg);
+        l_valid_msg <-- is_valid_msg_out (req_msg);
+        IF l_valid_msg = TRUE
+        THEN
+            l_req_typ <-- get_msg_out_type (req_msg);
+            CASE l_req_typ OF
+                /* Only checks the type is a request (<=> not invalid & not a response) */
+                EITHER e_msg_node_add_nodes_req,
+                    e_msg_node_add_references_req,
+                    e_msg_node_delete_nodes_req,
+                    e_msg_node_delete_references_req,
+                    e_msg_view_browse_req,
+                    e_msg_view_browse_next_req,
+                    e_msg_view_translate_browse_paths_to_node_ids_req,
+                    e_msg_view_register_nodes_req,
+                    e_msg_view_unregister_nodes_req,
+                    e_msg_query_first_req,
+                    e_msg_query_next_req,
+                    e_msg_attribute_read_req,
+                    e_msg_attribute_history_read_req,
+                    e_msg_attribute_write_req,
+                    e_msg_attribute_history_update_req,
+                    e_msg_method_call_req,
+                    e_msg_monitored_items_create_req,
+                    e_msg_monitored_items_modify_req,
+                    e_msg_monitored_items_set_monitoring_mode_req,
+                    e_msg_monitored_items_set_monitoring_mode_resp,
+                    e_msg_monitored_items_set_triggering_req,
+                    e_msg_monitored_items_delete_req,
+                    e_msg_subscription_create_req,
+                    e_msg_subscription_modify_req,
+                    e_msg_subscription_set_publishing_mode_req,
+                    e_msg_subscription_publish_req,
+                    e_msg_subscription_republish_req,
+                    e_msg_subscription_transfer_subscriptions_req,
+                    e_msg_subscription_delete_subscriptions_req
+                THEN
+                    l_resp_typ <-- get_response_type (l_req_typ);
+                    l_msg_header <-- alloc_msg_header (TRUE);
+                    l_valid_msg_header <-- is_valid_msg_out_header (l_msg_header);
+                    l_req_handle <-- client_fresh_req_handle (l_req_typ, l_resp_typ, TRUE, app_context);
+                    l_valid_req_handle <-- is_valid_req_handle (l_req_handle);
+                    IF l_valid_req_handle = TRUE &
+                        l_valid_msg_header = TRUE
+                    THEN
+                        ret, l_channel, l_session_token <-- client_validate_session_service_req (session, l_req_handle);
+                        IF ret = e_sc_ok
+                        THEN
+                            set_req_handle_channel (l_req_handle, l_channel);
+                            client_write_msg_out_header_req_handle (l_msg_header, l_req_handle);
+                            write_msg_out_header_session_token (l_msg_header, l_session_token);
+                            l_channel_cfg <-- get_channel_info (l_channel);
+                            ret, l_buffer <-- encode_msg (l_channel_cfg, e_msg_request_type, e_msg_session_close_req, l_msg_header, req_msg);
+                            l_valid_buffer <-- is_valid_buffer_out (l_buffer);
+                            IF l_valid_buffer = FALSE
+                            THEN
+                                l_channel := c_channel_indet
+                            END
+                        END
+                    ELSE
+                        ret := e_sc_bad_out_of_memory
+                    END;
+                    IF l_valid_msg_header = TRUE
+                    THEN
+                        dealloc_msg_header_out (l_msg_header)
+                    END
+                OR
+                    /* discovery services */
+                    e_msg_discovery_find_servers_req,
+                    e_msg_discovery_find_servers_on_network_req,
+                    e_msg_discovery_get_endpoints_req,
+                    e_msg_discovery_register_server_req,
+                    e_msg_discovery_register_server2_req
+                THEN
+                    l_valid_channel, l_channel <-- getall_valid_session_channel (session);
+                    IF l_valid_channel = TRUE
+                    THEN
+                        /* Use discovery operation since header shall not contain session information (see part 4) */
+                        ret, l_buffer, l_req_handle <-- local_client_discovery_service_request (l_channel, req_msg, app_context);
+                        IF ret /= e_sc_ok
+                        THEN
+                            l_channel := c_channel_indet
+                        END
+                    ELSE
+                        ret := e_sc_bad_invalid_argument
+                    END
+                ELSE
+                    ret := e_sc_bad_invalid_argument
+                END
+            END
+        ELSE
+            ret := e_sc_bad_invalid_argument
+        END;
+        dealloc_msg_out (req_msg);
+        channel := l_channel;
+        req_handle := l_req_handle;
+        buffer_out := l_buffer
+    END
+    ;
+
+    ret, buffer_out, req_handle <-- client_discovery_service_request (channel, req_msg, app_context) =
+    VAR
+        l_valid_msg
+    IN
+        bless_msg_out (req_msg);
+        l_valid_msg <-- is_valid_msg_out (req_msg);
+        IF l_valid_msg = TRUE
+        THEN
+            ret, buffer_out, req_handle <-- local_client_discovery_service_request (channel, req_msg, app_context)
+        ELSE
+            ret := e_sc_bad_invalid_argument;
+            buffer_out := c_byte_buffer_indet;
+            req_handle := c_client_request_handle_indet
+        END;
+        dealloc_msg_out (req_msg)
+    END
+    ;
+
+    client_snd_msg_failure (channel, request_handle, error_status) =
+    VAR
+        l_valid_req_handle,
+        l_req_handle_channel,
+        l_req_typ,
+        l_is_applicative,
+        l_app_context,
+        l_exp_resp_msg_typ,
+        l_bres,
+        l_session
+    IN
+        l_valid_req_handle <-- is_valid_req_handle (request_handle);
+        l_req_handle_channel <-- get_req_handle_channel (request_handle);
+        IF l_valid_req_handle = TRUE &
+            l_req_handle_channel = channel
+        THEN
+            l_exp_resp_msg_typ <-- get_req_handle_resp_typ (request_handle);
+            CASE l_exp_resp_msg_typ OF
+                EITHER
+                    e_msg_session_create_resp,
+                    e_msg_session_activate_resp,
+                    e_msg_session_close_resp,
+                    e_msg_session_cancel_resp
+                THEN
+                    /* It was session treatment sending which failed */
+                    l_bres, l_session <-- client_validate_session_service_resp (channel, request_handle);
+                    IF l_bres = TRUE
+                    THEN
+                        /* Close session since state is now invalid (req message not sent) */
+                        client_close_session (l_session, e_sc_bad_request_interrupted)
+                    END
+                ELSE
+                    /*It means it's application request and we have an app context that can be used*/
+                    l_is_applicative, l_app_context <-- get_req_handle_app_context (request_handle);
+                    l_req_typ <-- get_req_handle_req_typ (request_handle);
+                    client_remove_req_handle (request_handle);
+                    IF l_is_applicative = TRUE
+                    THEN
+                        cli_snd_failure (l_req_typ, l_app_context, error_status)
+                    END
+                END
+            END
+        END
+    END
+    ;
+
+    bres, sc, buffer_out, channel <-- server_send_publish_response (session, req_handle, statusCode, resp_typ, publish_resp_msg) =
+    VAR
+        l_is_valid_resp,
+        l_is_valid_header,
+        l_ret,
+        l_resp_msg_header,
+        l_buffer_out,
+        l_valid_buffer,
+        l_channel_cfg
+    IN
+        sc := e_sc_bad_session_id_invalid;
+        bres := FALSE;
+        buffer_out := c_byte_buffer_indet;
+        channel := c_channel_indet;
+        /* Set provided message as output message to be encoded and deallocated*/
+        bless_msg_out (publish_resp_msg);
+        l_is_valid_resp, l_ret, channel <-- server_validate_session_service_resp (session);
+        IF l_is_valid_resp = TRUE
+        THEN
+            l_resp_msg_header <-- alloc_msg_header (FALSE);
+            l_is_valid_header <-- is_valid_msg_out_header (l_resp_msg_header);
+            IF l_is_valid_header = TRUE
+            THEN
+                server_write_msg_out_header_req_handle (l_resp_msg_header, req_handle);
+                write_msg_resp_header_service_status (l_resp_msg_header, statusCode);
+                /* Response message encoded */
+                l_channel_cfg <-- get_channel_info (channel);
+                sc, l_buffer_out <-- encode_msg (l_channel_cfg, e_msg_response_type, resp_typ, l_resp_msg_header, publish_resp_msg);
+                dealloc_msg_header_out (l_resp_msg_header);
+                l_valid_buffer <-- is_valid_buffer_out (l_buffer_out);
+                IF l_valid_buffer = TRUE
+                THEN
+                    buffer_out := l_buffer_out;
+                    bres := TRUE
+                END
+            ELSE
+                sc := e_sc_bad_out_of_memory
+            END
+        END;
+        dealloc_msg_out (publish_resp_msg)
+    END
+    ;
+
+    bres <-- internal_server_inactive_session_prio_event (p_session, p_newSessionState) =
+    BEGIN
+        IF p_session /= c_session_indet THEN
+            bres := TRUE;
+            server_subscription_session_inactive (p_session, p_newSessionState);
+            IF p_newSessionState = e_session_closed THEN
+                service_set_view_set_session_closed (p_session)
+            END
+        ELSE
+            bres := FALSE
+        END
+    END
+    ;
+
+    service_mgr_UNINITIALISATION =
+    BEGIN
+        subscription_mgr_UNINITIALISATION;
+        service_set_view_UNINITIALISATION;
+        service_set_discovery_server_UNINITIALISATION;
+        service_mgr_bs_UNINITIALISATION
+    END
+
+END

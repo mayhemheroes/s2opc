@@ -1,0 +1,347 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+IMPLEMENTATION
+    channel_mgr_i
+
+REFINES
+    channel_mgr_r
+
+SEES
+    constants,
+    constants_statuscodes_bs,
+    time_reference_bs
+
+IMPORTS
+    channel_mgr_1,
+    channel_mgr_it,
+    channel_mgr_bs
+
+CONCRETE_VARIABLES
+    all_channel_closing, /* Indicates all secure channels are in closing state (S2OPC toolkit clear case) */
+    all_client_channel_closing /* Indicates all secure channels as a client are in closing state (S2OPC client activity clear) */
+
+INVARIANT
+    all_channel_closing : BOOL &
+    all_client_channel_closing : BOOL
+
+INITIALISATION
+    all_channel_closing := FALSE;
+    all_client_channel_closing := FALSE
+
+PROMOTES
+    is_valid_channel_config_idx,
+    is_valid_endpoint_config_idx,
+    send_channel_msg_buffer,
+    send_channel_error_msg,
+    server_get_endpoint_config,
+    is_client_channel,
+    get_channel_info,
+    get_connected_channel,
+    is_disconnecting_channel,
+    is_connected_channel,
+    get_SecurityPolicy,
+    channel_do_nothing,
+    get_connection_time
+
+LOCAL_OPERATIONS
+
+    l_close_secure_channel(p_channel) =
+    PRE
+        p_channel : t_channel_i &
+        p_channel : t_channel
+    THEN
+        IF  p_channel : s_channel_connected &
+            p_channel /: dom(a_endpoint) /* Client side only: */
+        THEN
+            s_cli_channel_disconnecting := s_cli_channel_disconnecting \/ {a_config(p_channel)}
+        END
+    END
+    ;
+
+    l_check_all_channel_lost =
+    BEGIN
+        channels_to_iterate,
+        channels_iterated,
+        all_channel_closing,
+        all_client_channel_closing
+        :(  channels_to_iterate <: t_channel &
+            channels_iterated   <: t_channel &
+            channels_to_iterate /\ channels_iterated = {} &
+            all_channel_closing : BOOL &
+            all_client_channel_closing : BOOL
+         )
+     END
+     ;
+
+     l_allowed_new_sc <-- l_is_new_sc_connection_allowed (is_one_sc_auto_closing) =
+     PRE
+         is_one_sc_auto_closing : BOOL
+     THEN
+        l_allowed_new_sc :=
+        bool(card(s_cli_channel_connecting) + card(s_channel_connected) /= card(t_channel) & /* No slot remaining */
+            (card(s_cli_channel_connecting) + card(s_channel_connected) < c_max_channels_connected
+             or is_one_sc_auto_closing = TRUE)  /* we accept a connection after the maximum if a connection was released in exchange */)
+     END
+
+OPERATIONS
+
+    /* Local operations */
+
+    l_close_secure_channel(p_channel) =
+    VAR
+        l_res,
+        l_channel_conf,
+        l_is_client_channel
+    IN
+        l_res, l_channel_conf <-- getall_channel_connected(p_channel);
+        IF l_res = TRUE THEN
+            l_is_client_channel <-- is_client_channel(p_channel);
+            IF l_is_client_channel = TRUE
+            THEN
+                add_cli_channel_disconnecting(l_channel_conf)
+            END
+            ;
+            finalize_close_secure_channel(p_channel)
+        END
+    END
+    ;
+
+    l_check_all_channel_lost =
+    VAR
+        l_cli_con,
+        l_con,
+        l_continue,
+        l_channel
+    IN
+        IF  all_channel_closing = TRUE or all_client_channel_closing = TRUE THEN
+            l_con := FALSE;
+            l_continue <-- init_iter_channel;
+            WHILE
+                l_continue = TRUE &
+                l_con      = FALSE
+            DO
+                l_continue, l_channel <-- continue_iter_channel;
+                l_cli_con <-- is_client_channel (l_channel);
+                IF all_channel_closing = TRUE or (all_client_channel_closing = TRUE & l_cli_con = TRUE)
+                THEN
+                    l_con <-- is_channel_connected(l_channel)
+                END
+            INVARIANT
+               channels_to_iterate <: t_channel &
+               channels_iterated   <: t_channel &
+               channels_to_iterate /\ channels_iterated = {} &
+               channels_to_iterate \/ channels_iterated = t_channel
+            VARIANT
+               card(channels_to_iterate)
+            END;
+            IF  l_con = FALSE THEN
+                last_connected_channel_lost(all_client_channel_closing);
+                all_channel_closing := FALSE;
+                all_client_channel_closing := FALSE
+            END
+        END
+    END
+    ;
+
+    l_allowed_new_sc <-- l_is_new_sc_connection_allowed (is_one_sc_auto_closing) =
+    VAR
+        l_card_used,
+        l_card_channel
+    IN
+        l_allowed_new_sc := FALSE;
+        l_card_used <-- get_card_channel_used;
+        l_card_channel <-- get_card_t_channel;
+        /* It is possible to have no slot at all when channels are already disconnecting due to auto close, wait a channel slot to be freed */
+        IF l_card_used /= l_card_channel THEN
+            /* Check we keep at least one channel slot to allow auto close channel to be evaluated later in services layer.
+            If we accept a connection and reach cardinal the secure channel layer will not accept any new connection and
+            service layer will not be aware of next connections attempts to evaluate possible auto close.
+            */
+            IF l_card_used < c_max_channels_connected or is_one_sc_auto_closing = TRUE
+            THEN
+                l_allowed_new_sc := TRUE
+            END
+        END
+    END
+    ;
+
+    /* Global operations */
+
+    bres <-- cli_open_secure_channel (config_idx, is_one_sc_auto_closing) =
+    VAR
+        l_already_connecting,
+        l_dom,
+        l_channel,
+        l_allowed_new_sc
+    IN
+        l_already_connecting <-- is_cli_channel_connecting(config_idx);
+        IF l_already_connecting = TRUE THEN
+            bres := TRUE /* Connection already requested: nothing to do */
+        ELSE
+            l_dom, l_channel <-- getall_config_inv(config_idx);
+            IF  l_dom = FALSE THEN
+                l_allowed_new_sc <-- l_is_new_sc_connection_allowed (is_one_sc_auto_closing);
+                IF l_allowed_new_sc = TRUE
+                THEN
+                    add_cli_channel_connecting(config_idx);
+                    prepare_cli_open_secure_channel(config_idx);
+                    bres := TRUE
+                ELSE
+                    bres := FALSE
+                END
+            ELSE
+                bres := FALSE
+            END
+        END
+    END
+    ;
+
+    bres <-- srv_new_secure_channel (endpoint_config_idx, channel_config_idx, channel, is_one_sc_auto_closing) =
+    VAR
+        l_con,
+        l_dom,
+        l_channel,
+        l_current_time,
+        l_allowed_new_sc
+    IN
+        l_con <-- is_channel_connected(channel);
+        l_dom, l_channel <-- getall_config_inv(channel_config_idx);
+        l_allowed_new_sc <-- l_is_new_sc_connection_allowed (is_one_sc_auto_closing);
+        IF  l_con = FALSE &
+            l_dom = FALSE &
+            l_allowed_new_sc = TRUE
+        THEN
+            l_current_time <-- get_current_TimerReference;
+            add_channel_connected(channel, l_current_time);
+            set_config(channel, channel_config_idx);
+            set_endpoint(channel, endpoint_config_idx);
+            define_SecurityPolicy(channel);
+            bres := TRUE
+        ELSE
+            bres := FALSE
+        END
+    END
+    ;
+
+    close_secure_channel(channel) =
+    BEGIN
+        l_close_secure_channel(channel)
+    END
+    ;
+
+    bres <-- close_all_channel (p_clientOnly) =
+    VAR
+        l_continue,
+        l_channel,
+        l_con,
+        l_cli_con,
+        l_any_channel_closing
+    IN
+        l_any_channel_closing := FALSE;
+        l_continue <-- init_iter_channel;
+        WHILE l_continue = TRUE DO
+            l_continue, l_channel <-- continue_iter_channel;
+            l_con <-- is_channel_connected(l_channel);
+            l_cli_con <-- is_client_channel (l_channel);
+            IF l_con = TRUE &
+                (p_clientOnly = FALSE or l_cli_con = TRUE)
+            THEN
+                l_any_channel_closing := TRUE;
+                l_close_secure_channel(l_channel)
+            END
+        INVARIANT
+            channels_to_iterate <: t_channel &
+            channels_iterated   <: t_channel &
+            channels_to_iterate /\ channels_iterated = {} &
+            channels_to_iterate \/ channels_iterated = t_channel
+        VARIANT
+            card(channels_to_iterate)
+        END;
+        all_channel_closing := bool(p_clientOnly = FALSE & l_any_channel_closing = TRUE);
+        all_client_channel_closing := bool(p_clientOnly = TRUE & l_any_channel_closing = TRUE);
+        bres := l_any_channel_closing
+    END
+    ;
+
+    channel_lost (channel) =
+    VAR
+        l_res,
+        l_channel_conf
+    IN
+        l_res, l_channel_conf <-- getall_channel_connected(channel);
+        IF  l_res = TRUE THEN
+            remove_channel_connected(channel);
+            remove_cli_channel_disconnecting(l_channel_conf);
+            reset_config(channel);
+            reset_endpoint(channel);
+            reset_SecurityPolicy(channel);
+            l_check_all_channel_lost
+        END
+    END
+    ;
+
+    bres <-- cli_set_connected_channel (config_idx, channel) =
+    VAR
+        l_is_channel_connecting,
+        l_is_channel_connected,
+        l_current_time
+    IN
+        l_is_channel_connecting <-- is_cli_channel_connecting(config_idx);
+        l_is_channel_connected  <-- is_channel_connected(channel);
+        IF  l_is_channel_connecting = TRUE &
+            l_is_channel_connected = FALSE
+        THEN
+            remove_cli_channel_connecting(config_idx);
+            l_current_time <-- get_current_TimerReference;
+            add_channel_connected(channel, l_current_time);
+            set_config(channel, config_idx);
+            define_SecurityPolicy(channel);
+            bres := TRUE
+        ELSE
+            bres := FALSE
+        END
+    END
+    ;
+
+    bres <-- cli_set_connection_timeout_channel (config_idx) =
+    VAR
+        l_res
+    IN
+        l_res <-- is_cli_channel_connecting(config_idx);
+        IF  l_res = TRUE THEN
+            remove_cli_channel_connecting(config_idx);
+            bres := TRUE
+        ELSE
+            bres := FALSE
+        END
+    END
+    ;
+
+    p_auto_closed_active <-- is_auto_close_channel_active =
+    VAR
+        l_card_used,
+        l_card_channel
+    IN
+        l_card_used <-- get_card_channel_used;
+        l_card_channel <-- get_card_t_channel;
+        p_auto_closed_active := bool(l_card_used >= c_max_channels_connected)
+    END
+
+END

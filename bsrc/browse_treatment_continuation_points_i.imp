@@ -1,0 +1,184 @@
+/*
+ * Licensed to Systerel under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * Systerel licenses this file to you under the Apache
+ * License, Version 2.0 (the "License"); you may not use this
+ * file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+IMPLEMENTATION
+    browse_treatment_continuation_points_i
+REFINES
+    browse_treatment_continuation_points
+IMPORTS
+    browse_treatment_continuation_points_bs,
+    browse_treatment_continuation_points_session_it
+PROMOTES
+    get_continuation_point_id
+SEES
+    constants,
+    session_mgr
+CONCRETE_VARIABLES
+    session_hasContinuationPoint_i,
+    session_ContinuationPoint_i
+INVARIANT
+    session_hasContinuationPoint_i : t_session_i --> BOOL &
+    session_ContinuationPoint_i    : t_session_i --> t_ContinuationPoint_i &
+
+    s_ContinuationPoints = session_ContinuationPoint_i[dom(session_hasContinuationPoint_i |> {TRUE})] &
+    ran(session_ContinuationPoint) = dom(session_hasContinuationPoint_i |> {TRUE}) &
+    dom(session_ContinuationPoint) = session_ContinuationPoint_i[dom(session_hasContinuationPoint_i |> {TRUE})]
+
+INITIALISATION
+    session_hasContinuationPoint_i := t_session_i * {FALSE};
+    session_ContinuationPoint_i    := t_session_i * {c_ContinuationPoint_indet}
+OPERATIONS
+
+    bres, p_ContinuationPointId <-- has_continuation_point(p_session) =
+    VAR
+        l_valid_session,
+        l_has_cp
+    IN
+        l_valid_session <-- is_valid_session (p_session);
+        l_has_cp := session_hasContinuationPoint_i(p_session);
+        IF l_valid_session = TRUE & l_has_cp = TRUE
+        THEN
+            bres := TRUE;
+            p_ContinuationPointId <-- get_continuation_point_id (session_ContinuationPoint_i(p_session))
+        ELSE
+            bres := FALSE;
+            p_ContinuationPointId := c_ContinuationPointId_indet
+        END
+    END
+    ;
+
+    bres, p_ContinuationPointId <-- create_continuation_point (p_session, p_nextIndex, p_maxTargetRef, p_browseView,
+                                                               p_nodeId, p_browseDirection, p_referenceType,
+                                                               p_includeSubtypes, p_nodeClassMask, p_resultMask) =
+    VAR
+        l_valid_session,
+        l_has_cp,
+        l_new_cp
+    IN
+        p_ContinuationPointId := c_ContinuationPointId_indet;
+        l_valid_session <-- is_valid_session (p_session);
+        l_has_cp := session_hasContinuationPoint_i(p_session);
+        bres := bool(l_valid_session = TRUE & l_has_cp = FALSE);
+        IF bres = TRUE THEN
+            bres, l_new_cp <-- create_continuation_point_bs (p_nextIndex, p_maxTargetRef, p_browseView, p_nodeId,
+                                                             p_browseDirection, p_referenceType, p_includeSubtypes,
+                                                             p_nodeClassMask, p_resultMask);
+            IF bres = TRUE THEN
+                session_hasContinuationPoint_i(p_session) := TRUE;
+                session_ContinuationPoint_i(p_session) := l_new_cp;
+                p_ContinuationPointId <-- get_continuation_point_id(l_new_cp)
+            END
+        END
+    END
+    ;
+
+    bres, p_nextIndex, p_maxTargetRef, p_browseView, p_nodeId,
+    p_browseDirection, p_referenceType, p_includeSubtypes, p_nodeClassMask, p_resultMask
+      <-- getall_continuation_point (p_session, p_continuationPointId) =
+    VAR
+        l_valid_session,
+        l_session_has_cp,
+        l_session_cp,
+        l_session_cp_id
+    IN
+        bres := FALSE;
+        p_nextIndex := 0;
+        p_maxTargetRef := 0;
+        p_browseView := c_NodeId_indet;
+        p_nodeId := c_NodeId_indet;
+        p_browseDirection := e_bd_indet;
+        p_referenceType := c_NodeId_indet;
+        p_includeSubtypes := FALSE;
+        p_nodeClassMask := c_BrowseNodeClassMask_indet;
+        p_resultMask := c_BrowseResultMask_indet;
+
+        l_valid_session <-- is_valid_session (p_session);
+        l_session_has_cp := session_hasContinuationPoint_i(p_session);
+        IF l_valid_session = TRUE & l_session_has_cp = TRUE THEN
+            l_session_cp := session_ContinuationPoint_i(p_session);
+            l_session_cp_id <-- get_continuation_point_id (l_session_cp);
+            IF l_session_cp_id = p_continuationPointId THEN
+                bres := TRUE;
+                p_nextIndex, p_maxTargetRef, p_browseView, p_nodeId,
+                p_browseDirection, p_referenceType, p_includeSubtypes, p_nodeClassMask, p_resultMask
+                  <-- getall_continuation_point_bs (l_session_cp)
+            END
+        END
+    END
+    ;
+
+    bres <-- release_continuation_point (p_session, p_continuationPointId) =
+    VAR
+        l_valid_session,
+        l_session_has_cp,
+        l_session_cp,
+        l_session_cp_id
+    IN
+        bres := FALSE;
+        l_valid_session <-- is_valid_session (p_session);
+        l_session_has_cp := session_hasContinuationPoint_i(p_session);
+        IF l_valid_session = TRUE & l_session_has_cp = TRUE THEN
+            l_session_cp := session_ContinuationPoint_i(p_session);
+            l_session_cp_id <-- get_continuation_point_id (l_session_cp);
+            IF l_session_cp_id = p_continuationPointId THEN
+                bres := TRUE;
+                /* Clear the continuation point */
+                session_hasContinuationPoint_i(p_session) := FALSE;
+                session_ContinuationPoint_i(p_session) := c_ContinuationPoint_indet;
+                clear_continuation_point(l_session_cp)
+            END
+        END
+    END
+    ;
+
+    set_session_closed (p_session) =
+    BEGIN
+        clear_continuation_point(session_ContinuationPoint_i(p_session));
+        session_hasContinuationPoint_i(p_session) := FALSE;
+        session_ContinuationPoint_i(p_session) := c_ContinuationPoint_indet
+    END
+    ;
+
+    continuation_points_UNINITIALISATION =
+    VAR
+        l_continue,
+        l_session
+    IN
+        l_continue <-- init_iter_session;
+        WHILE
+            l_continue   = TRUE
+        DO
+            l_continue, l_session <-- continue_iter_session;
+            clear_continuation_point(session_ContinuationPoint_i(l_session));
+            session_hasContinuationPoint_i(l_session) := FALSE;
+            session_ContinuationPoint_i(l_session) := c_ContinuationPoint_indet
+        INVARIANT
+            l_continue = bool(sessions_to_iterate /= {}) &
+            sessions_to_iterate /\ sessions_iterated = {} &
+            sessions_to_iterate \/ sessions_iterated = t_session &
+            session_hasContinuationPoint_i[sessions_iterated] = {FALSE} &
+            session_ContinuationPoint_i[sessions_iterated] = {c_ContinuationPoint_indet} &
+            s_ContinuationPoints = session_ContinuationPoint_i[sessions_to_iterate] - {c_ContinuationPoint_indet} &
+            dom(id_ContinuationPoint) = session_ContinuationPoint_i[sessions_to_iterate] - {c_ContinuationPoint_indet}
+        VARIANT
+            card(sessions_to_iterate)
+        END
+    END
+
+END
