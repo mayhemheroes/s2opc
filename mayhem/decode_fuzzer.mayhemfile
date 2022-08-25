@@ -1,0 +1,4 @@
+project: PROJECT
+target: decode_fuzzer
+cmds:
+- cmd: /out/decode_fuzzer
