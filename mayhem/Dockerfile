@@ -15,7 +15,11 @@
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder
-RUN apt-get update --fix-missing && apt-get install -y --fix-missing make cmake git curl
+RUN for i in 1 2 3 4 5; do \
+      apt-get update --fix-missing && \
+      apt-get install -y --fix-missing make cmake git curl && break || \
+      { echo "Attempt $i failed, retrying..."; sleep 10; }; \
+    done
 
 # Sources and dependencies
 COPY . S2OPC
