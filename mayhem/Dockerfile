@@ -15,7 +15,7 @@
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder
-RUN apt-get update && apt-get install -y make cmake git curl
+RUN apt-get update --fix-missing && apt-get install -y --fix-missing make cmake git curl
 
 # Sources and dependencies
 COPY . S2OPC
