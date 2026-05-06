@@ -38,6 +38,7 @@ cmake -DPYTHON_EXECUTABLE="/usr/bin/python3" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
       -DCMAKE_C_FLAGS="-Wno-error -Wno-unused-but-set-variable -Wno-unterminated-string-initialization" \
+      -DMBEDTLS_FATAL_WARNINGS=OFF \
       -DENABLE_TESTING=OFF \
       -DENABLE_PROGRAMS=OFF \
       $WORK/mbedtls-2.*
