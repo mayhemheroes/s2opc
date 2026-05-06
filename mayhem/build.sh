@@ -32,8 +32,8 @@ cd $MBEDTLS_BUILD
 # Save and clear sanitizer flags for mbedtls to avoid -Werror issues with unused variables
 SAVED_CFLAGS="${CFLAGS:-}"
 SAVED_CXXFLAGS="${CXXFLAGS:-}"
-export CFLAGS="-Wno-unused-but-set-variable"
-export CXXFLAGS="-Wno-unused-but-set-variable"
+export CFLAGS="${CFLAGS:-} -Wno-unused-but-set-variable -Wno-unterminated-string-initialization"
+export CXXFLAGS="${CXXFLAGS:-} -Wno-unused-but-set-variable -Wno-unterminated-string-initialization"
 cmake -DPYTHON_EXECUTABLE="/usr/bin/python3" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
